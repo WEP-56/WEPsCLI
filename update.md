@@ -174,3 +174,18 @@ npm publish --otp=6位验证码
   - `wepscli --help`
   - `wepscli`
 
+## 2026-02-22 - v0.1.5
+
+- 发布状态: 已发布到 npm
+- 重点改动:
+  - 由于超过项目约束，重构拆分shell-app.tsx ，agent-runtime.ts
+  - 补充/retry等常用命令，跟进更新命令提示栏
+  - 完成P8-detail / overlay / scroll 临时状态继续清理、避免 session 之间串 runtime 瞬时状态
+  - 完成了P10-1 添加了skills功能以及一系列斜杠命令。通过/skills 查看弹出的命令列表以使用
+- 发布前验证:
+  - `npx tsc -p tsconfig.build.json --noEmit`
+  - `npm run build`
+  - `npm pack`
+  - `npm install -g .\wepscli-0.1.0.tgz`
+  - `wepscli --help`
+  - `wepscli`
