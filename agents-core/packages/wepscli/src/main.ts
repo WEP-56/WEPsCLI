@@ -1,10 +1,14 @@
 import chalk from "chalk";
 import { appendFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { APP_NAME, ensureAgentDir, getAgentDir, getAuthPath, getProvidersPath, getSettingsPath } from "./config.js";
 import { ProviderProfileService } from "./provider-profiles/index.js";
 import { runOnboarding } from "./onboarding/run-onboarding.js";
+
+const require = createRequire(import.meta.url);
+const { version: APP_VERSION } = require("../package.json") as { version: string };
 
 function writeStartupErrorLog(label: string, error: unknown): void {
 	try {
@@ -69,7 +73,7 @@ Current status:
 }
 
 function printVersion(): void {
-	console.log("0.1.0");
+	console.log(APP_VERSION);
 }
 
 function printBootstrapSummary(): void {
