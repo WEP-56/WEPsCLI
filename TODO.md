@@ -202,6 +202,12 @@
 - [ ] clipboard image
 - [ ] 更完整的 provider 管理
 
+### P11 本地窗口式应用
+
+ 状态：待做
+ 
+ - [ ]基于.agents-core\packages\web-ui 构建electron应用
+
 ## 当前下一步
 
 当前回到 `P5 Slash Commands 实功能化`，优先补:
