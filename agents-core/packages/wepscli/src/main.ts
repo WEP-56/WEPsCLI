@@ -1,6 +1,7 @@
 import chalk from "chalk";
 import { appendFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { APP_NAME, ensureAgentDir, getAgentDir, getAuthPath, getProvidersPath, getSettingsPath } from "./config.js";
 import { ProviderProfileService } from "./provider-profiles/index.js";
 import { runOnboarding } from "./onboarding/run-onboarding.js";
@@ -25,13 +26,19 @@ function hasBunAvailable(): boolean {
 	return result.status === 0;
 }
 
-function relaunchInBun(): number | null {
+async function resolveBunPreloadPath(): Promise<string> {
+	const resolved = await import.meta.resolve("@opentui/solid/preload");
+	return resolved.startsWith("file:") ? fileURLToPath(resolved) : resolved;
+}
+
+async function relaunchInBun(): Promise<number | null> {
 	const entry = process.argv[1];
 	if (!entry) {
 		return null;
 	}
 
-	const child = spawnSync("bun", ["--conditions=browser", "--preload", "@opentui/solid/preload", entry, ...process.argv.slice(2)], {
+	const preloadPath = await resolveBunPreloadPath();
+	const child = spawnSync("bun", ["--conditions=browser", "--preload", preloadPath, entry, ...process.argv.slice(2)], {
 		stdio: "inherit",
 		env: process.env,
 		shell: process.platform === "win32",
@@ -110,7 +117,7 @@ export async function main(args: string[]): Promise<void> {
 
 	if (process.stdin.isTTY && process.stdout.isTTY) {
 		if (!isBunRuntime() && hasBunAvailable()) {
-			const exitCode = relaunchInBun();
+			const exitCode = await relaunchInBun();
 			if (typeof exitCode === "number" && exitCode !== 0) {
 				process.exitCode = exitCode;
 			}

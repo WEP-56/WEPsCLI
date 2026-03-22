@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
-import { generateDiffString } from "../../../coding-agent/dist/core/tools/edit-diff.js";
+import { generateDiffString } from "./tool-diff.js";
 
 type ContentBlock = {
 	type?: string;
@@ -217,19 +217,55 @@ function computeWritePreviewDiff(
 	}
 }
 
-function buildEditChange(path: string, result: unknown): ToolFileChange {
+function computeEditPreviewDiff(
+	path: string,
+	args: unknown,
+): Pick<ToolFileChange, "diffText" | "diffLines" | "diffStats" | "firstChangedLine"> | undefined {
+	try {
+		const record = readRecord(args);
+		const oldText = readString(record, ["oldText", "old_text"]);
+		const newText = readString(record, ["newText", "new_text"]);
+		if (oldText === undefined || newText === undefined) {
+			return undefined;
+		}
+
+		const absolutePath = resolveWorkspacePath(path);
+		const existingContent = existsSync(absolutePath) ? readFileSync(absolutePath, "utf8") : "";
+		const newContent = existingContent.includes(oldText)
+			? existingContent.replace(oldText, newText)
+			: newText;
+		const baseContent = existingContent.includes(oldText) ? existingContent : oldText;
+		const diffResult = generateDiffString(baseContent, newContent);
+		if (!diffResult.diff) {
+			return undefined;
+		}
+
+		const parsedDiff = parseToolDiff(diffResult.diff);
+		return {
+			diffText: diffResult.diff,
+			diffLines: parsedDiff.lines,
+			diffStats: parsedDiff.stats,
+			firstChangedLine: diffResult.firstChangedLine,
+		};
+	} catch {
+		return undefined;
+	}
+}
+
+function buildEditChange(path: string, args: unknown, result: unknown): ToolFileChange {
 	const diffText = readDiffText(result);
 	const parsedDiff = diffText ? parseToolDiff(diffText) : undefined;
 	const outputText = extractContentText(result);
+	const previewDiff = !result ? computeEditPreviewDiff(path, args) : undefined;
 
 	return {
 		kind: "edit",
 		path,
-		summary: outputText || (parsedDiff ? `Updated ${path}` : `Editing ${path}`),
-		firstChangedLine: readFirstChangedLine(result),
-		diffText,
-		diffLines: parsedDiff?.lines,
-		diffStats: parsedDiff?.stats,
+		summary: outputText || (diffText || previewDiff ? `Updated ${path}` : `Editing ${path}`),
+		firstChangedLine: readFirstChangedLine(result) ?? previewDiff?.firstChangedLine,
+		diffText: diffText ?? previewDiff?.diffText,
+		diffLines: parsedDiff?.lines ?? previewDiff?.diffLines,
+		diffStats: parsedDiff?.stats ?? previewDiff?.diffStats,
 	};
 }
 
@@ -258,7 +294,7 @@ export function extractToolFileChanges(toolName: string, args: unknown, result: 
 	}
 
 	if (normalized === "edit" || normalized === "edit_file" || normalized === "apply_patch" || normalized === "patch") {
-		return [buildEditChange(path, result)];
+		return [buildEditChange(path, args, result)];
 	}
 
 	if (normalized === "write" || normalized === "write_file") {

@@ -1,11 +1,15 @@
 import assert from "node:assert/strict";
 import { WepsAgentRuntime } from "../src/WEPSCLI-shell/agent-runtime.ts";
 import type { RuntimeSessionState } from "../src/WEPSCLI-shell/runtime-status.ts";
+import { createToolMessageState } from "../src/WEPSCLI-shell/tool-messages.ts";
 
 const runtimeStates: RuntimeSessionState[] = [];
 const systemMessages: string[] = [];
+const toolPatches: Array<{ tool?: { status?: string; outputText?: string } }> = [];
+const closedApprovalIds: string[] = [];
 let abortCalls = 0;
 let abortCompactionCalls = 0;
+let approvalResolved = 0;
 
 const runtime = new WepsAgentRuntime(
 	{
@@ -20,12 +24,18 @@ const runtime = new WepsAgentRuntime(
 			systemMessages.push(message.content);
 		},
 		insertMessageBefore: () => {},
-		patchMessage: () => {},
+		replaceMessages: () => {},
+		patchMessage: (_sessionId, _messageId, patch) => {
+			toolPatches.push(patch as { tool?: { status?: string; outputText?: string } });
+		},
 		openApproval: () => {},
-		closeApproval: () => {},
+		closeApproval: (_sessionId, requestId) => {
+			closedApprovalIds.push(requestId);
+		},
 		updateRuntimeState: (_sessionId, state) => {
 			runtimeStates.push(state);
 		},
+		updateSessionBinding: () => {},
 	},
 );
 
@@ -41,8 +51,8 @@ const sessionId = "interrupt-status-smoke";
 	},
 	unsubscribe: () => {},
 	removeBeforeToolCallHook: () => {},
-	toolMessageIds: new Map(),
-	toolStates: new Map(),
+	toolMessageIds: new Map([["call-1", "msg-1"]]),
+	toolStates: new Map([["call-1", createToolMessageState("call-1", "write", { path: "docs/out.md", content: "hi" })]]),
 	activePrompts: 1,
 	runtimeState: {
 		phase: "running",
@@ -53,13 +63,24 @@ const sessionId = "interrupt-status-smoke";
 	sequence: 0,
 } as any);
 
+(runtime as any).pendingApprovals.set("approval-1", {
+	sessionId,
+	resolve: () => {
+		approvalResolved += 1;
+	},
+});
+
 const aborted = await runtime.abort(sessionId);
 assert.equal(aborted, true);
 assert.equal(abortCalls, 1);
 assert.equal(abortCompactionCalls, 1);
+assert.equal(approvalResolved, 1);
+assert.equal(closedApprovalIds[0], "approval-1");
 assert.match(systemMessages[0] ?? "", /Request interrupted/i);
 assert.equal(runtimeStates.at(-1)?.phase, "interrupted");
 assert.equal(runtimeStates.at(-1)?.canContinue, true);
+assert.equal(toolPatches.at(-1)?.tool?.status, "failed");
+assert.match(toolPatches.at(-1)?.tool?.outputText ?? "", /Cancelled before completion/i);
 
 const eventRecord = {
 	toolMessageIds: new Map<string, string>(),

@@ -1,6 +1,7 @@
 import { useKeyboard } from "@opentui/solid";
 import { For, Show, createEffect, createMemo, createSignal } from "solid-js";
 import { getSlashCommands } from "./slash-commands.js";
+import type { ShellModeTone } from "./shell-modes.js";
 import { wepscliShellTheme as theme } from "./theme.js";
 import type { ToolMessageState } from "./tool-messages.js";
 import type { OverlayOption } from "./types.js";
@@ -85,10 +86,13 @@ export function ChatComposer(props: {
 	value: string;
 	providerLabel: string;
 	modelLabel: string;
+	modeLabel: string;
+	modeTone: ShellModeTone;
 	inputRef: (ref: ComposerInputRef) => void;
 	onAction: (id: string) => void;
 	onFocus: () => void;
 	onInput: (value: string) => void;
+	onModeClick: () => void;
 	onSubmit: (value: string) => void;
 	onSelectSlashCommand: (id: string) => void;
 }) {
@@ -162,24 +166,40 @@ export function ChatComposer(props: {
 					</For>
 				</box>
 			) : null}
-			<box backgroundColor={theme.panelAlt} paddingLeft={0} paddingRight={0} paddingTop={0} paddingBottom={0} flexDirection="column" gap={0} onMouseUp={props.onFocus}>
-				<input
-					ref={(ref: ComposerInputRef) => {
-						inputRef = ref;
-						props.inputRef(ref);
-					}}
-					focused={props.focused}
-					value={draftValue()}
-					placeholder="Type / or ask"
-					backgroundColor={theme.panelAlt}
-					textColor={theme.text}
-					focusedBackgroundColor={theme.panelAlt}
-					focusedTextColor={theme.text}
-					cursorColor={theme.accent}
-					onMouseUp={props.onFocus}
-					onInput={(value: string) => updateValue(value)}
-					onSubmit={(value: string) => submitCurrentValue(value)}
-				/>
+			<box backgroundColor={theme.panelAlt} paddingLeft={0} paddingRight={0} paddingTop={0} paddingBottom={0} flexDirection="row" gap={0} onMouseUp={props.onFocus}>
+				<box flexGrow={1} minWidth={0}>
+					<input
+						ref={(ref: ComposerInputRef) => {
+							inputRef = ref;
+							props.inputRef(ref);
+						}}
+						focused={props.focused}
+						value={draftValue()}
+						placeholder="Type / or ask"
+						backgroundColor={theme.panelAlt}
+						textColor={theme.text}
+						focusedBackgroundColor={theme.panelAlt}
+						focusedTextColor={theme.text}
+						cursorColor={theme.accent}
+						onMouseUp={props.onFocus}
+						onInput={(value: string) => updateValue(value)}
+						onSubmit={(value: string) => submitCurrentValue(value)}
+					/>
+				</box>
+				<box
+					flexShrink={0}
+					width={14}
+					backgroundColor={modeBackgroundColor(props.modeTone)}
+					border={["left"]}
+					borderColor={props.focused ? theme.accent : theme.border}
+					paddingLeft={1}
+					paddingRight={1}
+					alignItems="center"
+					justifyContent="center"
+					onMouseUp={props.onModeClick}
+				>
+					<text fg={modeForegroundColor(props.modeTone)}>{truncateText(props.modeLabel, 12)}</text>
+				</box>
 			</box>
 		</box>
 	);
@@ -306,4 +326,28 @@ function MiniChip(props: { label: string; tone: "accent" | "muted"; onClick: () 
 
 function truncateText(value: string, maxLength: number): string {
 	return value.length <= maxLength ? value : `${value.slice(0, Math.max(0, maxLength - 3))}...`;
+}
+
+function modeBackgroundColor(tone: ShellModeTone): string {
+	switch (tone) {
+		case "accent":
+			return theme.accent;
+		case "warning":
+			return theme.warning;
+		case "muted":
+			return theme.panelMuted;
+		case "danger":
+			return theme.danger;
+	}
+}
+
+function modeForegroundColor(tone: ShellModeTone): string {
+	switch (tone) {
+		case "accent":
+		case "warning":
+		case "danger":
+			return theme.background;
+		case "muted":
+			return theme.text;
+	}
 }

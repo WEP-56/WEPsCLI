@@ -7,6 +7,8 @@ declare module "@opentui/solid" {
 			name: string;
 			ctrl?: boolean;
 			meta?: boolean;
+			option?: boolean;
+			shift?: boolean;
 			preventDefault: () => void;
 			stopPropagation: () => void;
 		}) => void,

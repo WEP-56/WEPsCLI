@@ -1,3 +1,4 @@
+import { formatToolDiffStats, toolFileChangeLocation, type ToolFileChange, extractToolFileChanges } from "./tool-file-changes.js";
 import { formatToolArgs } from "./tool-messages.js";
 
 export type ToolApprovalDecision = "allow" | "reject" | "cancel";
@@ -11,59 +12,77 @@ export interface ToolApprovalRequest {
 	reason: string;
 	summary: string;
 	argsText: string;
+	commandText?: string;
+	fileChanges: ToolFileChange[];
 }
 
-function readPath(args: unknown): string | undefined {
-	if (typeof args !== "object" || args === null) {
+function readRecord(args: unknown): Record<string, unknown> | undefined {
+	return typeof args === "object" && args !== null ? (args as Record<string, unknown>) : undefined;
+}
+
+function readString(record: Record<string, unknown> | undefined, keys: string[]): string | undefined {
+	if (!record) {
 		return undefined;
 	}
-	const record = args as Record<string, unknown>;
-	const candidate = record.path ?? record.file_path ?? record.filePath ?? record.target ?? record.destination;
-	return typeof candidate === "string" && candidate.trim() ? candidate.trim() : undefined;
+	for (const key of keys) {
+		const value = record[key];
+		if (typeof value === "string" && value.trim()) {
+			return value.trim();
+		}
+	}
+	return undefined;
 }
 
 function readCommand(args: unknown): string | undefined {
-	if (typeof args !== "object" || args === null) {
-		return undefined;
+	return readString(readRecord(args), ["command", "cmd", "script"]);
+}
+
+function summarizeFileChange(prefix: string, change: ToolFileChange | undefined): string {
+	if (!change) {
+		return prefix;
 	}
-	const record = args as Record<string, unknown>;
-	const candidate = record.command ?? record.cmd ?? record.script;
-	return typeof candidate === "string" && candidate.trim() ? candidate.trim() : undefined;
+
+	const location = toolFileChangeLocation(change);
+	const stats = formatToolDiffStats(change.diffStats);
+	return `${prefix} ${location}${stats ? ` (${stats})` : ""}`;
 }
 
 function classifyToolRisk(
 	toolName: string,
 	args: unknown,
+	fileChanges: ToolFileChange[],
 ): {
 	riskLabel: string;
 	reason: string;
 	summary: string;
+	commandText?: string;
 } | undefined {
 	const normalized = toolName.toLowerCase();
-	const path = readPath(args);
 	const command = readCommand(args);
+	const firstFileChange = fileChanges[0];
 
 	if (normalized === "bash" || normalized === "shell_command" || normalized === "shell" || normalized === "exec") {
 		return {
-			riskLabel: "HIGH RISK",
+			riskLabel: "SHELL COMMAND",
 			reason: "This command can execute arbitrary shell operations in the workspace.",
-			summary: command ? `Run shell command:\n${command}` : "Run a shell command with arbitrary side effects.",
+			summary: command ? "Run a shell command in the workspace." : "Run a shell command with arbitrary side effects.",
+			commandText: command,
 		};
 	}
 
 	if (normalized === "write" || normalized === "write_file") {
 		return {
 			riskLabel: "FILE WRITE",
-			reason: "This tool will create or overwrite a file.",
-			summary: path ? `Write file:\n${path}` : "Write file contents to disk.",
+			reason: "This tool will create or overwrite a file on disk.",
+			summary: summarizeFileChange("Write", firstFileChange),
 		};
 	}
 
 	if (normalized === "edit" || normalized === "edit_file" || normalized === "apply_patch" || normalized === "patch") {
 		return {
 			riskLabel: "FILE EDIT",
-			reason: "This tool will modify existing file contents.",
-			summary: path ? `Edit file:\n${path}` : "Apply an in-place file edit or patch.",
+			reason: "This tool will modify existing file contents on disk.",
+			summary: summarizeFileChange("Edit", firstFileChange),
 		};
 	}
 
@@ -77,7 +96,8 @@ export function createToolApprovalRequest(
 	toolName: string,
 	args: unknown,
 ): ToolApprovalRequest | undefined {
-	const classification = classifyToolRisk(toolName, args);
+	const fileChanges = extractToolFileChanges(toolName, args, undefined);
+	const classification = classifyToolRisk(toolName, args, fileChanges);
 	if (!classification) {
 		return undefined;
 	}
@@ -91,6 +111,8 @@ export function createToolApprovalRequest(
 		reason: classification.reason,
 		summary: classification.summary,
 		argsText: formatToolArgs(args),
+		commandText: classification.commandText,
+		fileChanges,
 	};
 }
 

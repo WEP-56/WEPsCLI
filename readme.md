@@ -15,6 +15,26 @@
 - `TODO.md`
   当前分阶段路线图。
 
+## 快速体验
+
+```powershell
+本项目已发布到npm，输入如下命令安装
+npm install -g wepscli
+
+安装完毕后，请输入一下命令确认安装成功
+wepscli --help
+wepscli --version
+
+使用如下命令以启动并快速体验本项目
+wepscli
+
+如需卸载，请输入
+npm uninstall -g wepscli
+
+如需完全清除使用痕迹，请删除，但这会导致您丢失会话内容
+user/username/.wepscli
+```
+
 ## 当前进度
 
 根据当前工作区进展，已经推进到：

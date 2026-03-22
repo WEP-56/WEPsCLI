@@ -20,6 +20,8 @@ import {
 	createRunningRuntimeState,
 	type RuntimeSessionState,
 } from "./runtime-status.js";
+import { getRuntimeRecoveryHint } from "./runtime-recovery.js";
+import type { ShellModeId } from "./shell-modes.js";
 import type { TranscriptMessagePatch } from "./transcript-state.js";
 import {
 	createToolApprovalRequest,
@@ -71,6 +73,14 @@ interface RuntimeSessionBinding {
 	runtimeSessionFile?: string;
 }
 
+type BeforeToolCallHandler = (
+	context: {
+		toolCall: { id: string; name: string; arguments: unknown };
+		args: unknown;
+	},
+	signal?: AbortSignal,
+) => Promise<{ block?: boolean; reason?: string } | undefined>;
+
 type ProviderRegistrationConfig = Parameters<ModelRegistry["registerProvider"]>[1];
 type ProviderModelDefinition = NonNullable<ProviderRegistrationConfig["models"]>[number];
 type CodingAgentRuntime = {
@@ -85,9 +95,7 @@ let codingAgentRuntimePromise: Promise<CodingAgentRuntime> | undefined;
 
 async function loadCodingAgentRuntime(): Promise<CodingAgentRuntime> {
 	if (!codingAgentRuntimePromise) {
-		codingAgentRuntimePromise = import("@mariozechner/pi-coding-agent")
-			.then((module) => module as CodingAgentRuntime)
-			.catch(async () => (await import(new URL("../../../coding-agent/dist/index.js", import.meta.url).href)) as CodingAgentRuntime);
+		codingAgentRuntimePromise = import("@mariozechner/pi-coding-agent").then((module) => module as CodingAgentRuntime);
 	}
 	return codingAgentRuntimePromise;
 }
@@ -173,6 +181,19 @@ function formatRuntimeError(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
+function formatCompactionResultMessage(result: { tokensBefore?: number }): string {
+	if (typeof result.tokensBefore === "number" && Number.isFinite(result.tokensBefore)) {
+		return `Context compacted from ${result.tokensBefore.toLocaleString("en-US")} tokens.`;
+	}
+	return "Context compacted.";
+}
+
+function cancellationToolOutput(reason: string): { content: Array<{ type: "text"; text: string }> } {
+	return {
+		content: [{ type: "text", text: reason }],
+	};
+}
+
 function toModelDefinition(model: DiscoveredModel): ProviderModelDefinition {
 	return {
 		id: model.id,
@@ -190,12 +211,28 @@ function getRuntimeSessionDir(cwd: string, agentDir: string): string {
 	return join(agentDir, "sessions", safePath);
 }
 
+function installBeforeToolCallHook(session: AgentSession, handler: BeforeToolCallHandler): () => void {
+	if (typeof session.addBeforeToolCall === "function") {
+		return session.addBeforeToolCall(handler);
+	}
+
+	if (typeof session.agent?.setBeforeToolCall === "function") {
+		session.agent.setBeforeToolCall(handler);
+		return () => {
+			session.agent.setBeforeToolCall?.(undefined);
+		};
+	}
+
+	throw new Error("The installed pi-coding-agent runtime does not expose a before-tool-call hook API.");
+}
+
 export class WepsAgentRuntime {
 	private readonly records = new Map<string, RuntimeSessionRecord>();
 	private readonly pending = new Map<string, Promise<RuntimeSessionRecord>>();
 	private readonly pendingApprovals = new Map<string, PendingApprovalRecord>();
 	private readonly cwd: string;
 	private readonly agentDir: string;
+	private currentMode: ShellModeId = "agent";
 	private approvalSequence = 0;
 
 	constructor(
@@ -226,7 +263,7 @@ export class WepsAgentRuntime {
 			if (!this.isAbortLikeError(error)) {
 				const message = formatRuntimeError(error);
 				this.appendSystemMessage(sessionId, record, message);
-				this.setRuntimeState(sessionId, record, createErrorRuntimeState("Request failed · ready", message));
+				this.applyRecoveryState(sessionId, record, message, "Request failed - ready");
 			}
 		} finally {
 			record.activePrompts = Math.max(0, record.activePrompts - 1);
@@ -249,14 +286,61 @@ export class WepsAgentRuntime {
 		}
 		record.session.abortCompaction?.();
 		await record.session.abort().catch(() => {});
+		this.cleanupAfterInterruption(sessionId, record, "Cancelled before completion.");
 		this.appendSystemMessage(sessionId, record, "Request interrupted. You can continue with a new prompt.");
 		this.setRuntimeState(
 			sessionId,
 			record,
-			createInterruptedRuntimeState("Interrupted · ready", "The current request was cancelled."),
+			createInterruptedRuntimeState("Interrupted - ready", "The current request was cancelled."),
 		);
 		record.activePrompts = 0;
 		return true;
+	}
+
+	async compact(
+		sessionId: string,
+		selection: RuntimeSelection,
+		binding: RuntimeSessionBinding = {},
+		customInstructions?: string,
+	): Promise<boolean> {
+		const record = await this.ensureSession(sessionId, selection, binding);
+		const compactSession = record.session as AgentSession & {
+			compact?: (customInstructions?: string) => Promise<{ tokensBefore?: number }>;
+		};
+
+		if (typeof compactSession.compact !== "function") {
+			this.appendSystemMessage(sessionId, record, "Manual compaction is not available in the current runtime.");
+			this.setRuntimeState(sessionId, record, createErrorRuntimeState("Compaction unavailable - ready"));
+			return false;
+		}
+
+		record.activePrompts += 1;
+		this.setRuntimeState(sessionId, record, createCompactingRuntimeState("Compacting context"));
+		try {
+			await this.applySelection(record, selection);
+			const result = await compactSession.compact(customInstructions);
+			this.appendSystemMessage(sessionId, record, formatCompactionResultMessage(result ?? {}));
+			this.setRuntimeState(sessionId, record, createIdleRuntimeState());
+			return true;
+		} catch (error) {
+			if (this.isAbortLikeError(error)) {
+				this.appendSystemMessage(sessionId, record, "Compaction cancelled.");
+				this.setRuntimeState(
+					sessionId,
+					record,
+					createInterruptedRuntimeState("Compaction cancelled - ready", "You can continue with a new prompt."),
+				);
+				return false;
+			}
+
+			const message = formatRuntimeError(error);
+			this.appendSystemMessage(sessionId, record, `Compaction failed: ${message}`);
+			this.applyRecoveryState(sessionId, record, message, "Compaction failed - ready");
+			return false;
+		} finally {
+			record.activePrompts = Math.max(0, record.activePrompts - 1);
+			this.resetRuntimeStateAfterActivity(sessionId, record);
+		}
 	}
 
 	async syncSelection(sessionId: string, selection: RuntimeSelection): Promise<void> {
@@ -267,8 +351,14 @@ export class WepsAgentRuntime {
 		try {
 			await this.applySelection(record, selection);
 		} catch (error) {
-			this.appendSystemMessage(sessionId, record, formatRuntimeError(error));
+			const message = formatRuntimeError(error);
+			this.appendSystemMessage(sessionId, record, message);
+			this.applyRecoveryState(sessionId, record, message, "Selection failed - ready");
 		}
+	}
+
+	setMode(mode: ShellModeId): void {
+		this.currentMode = mode;
 	}
 
 	dispose(): void {
@@ -380,7 +470,7 @@ export class WepsAgentRuntime {
 			sequence: 0,
 		};
 
-		record.removeBeforeToolCallHook = session.addBeforeToolCall(async ({ toolCall, args }, signal) =>
+		record.removeBeforeToolCallHook = installBeforeToolCallHook(session, async ({ toolCall, args }, signal) =>
 			this.handleApprovalRequest(sessionId, record, toolCall.id, toolCall.name, args, signal),
 		);
 		record.unsubscribe = session.subscribe((event) => {
@@ -490,6 +580,39 @@ export class WepsAgentRuntime {
 		}
 	}
 
+	private cleanupAfterInterruption(sessionId: string, record: RuntimeSessionRecord, reason: string): void {
+		for (const [requestId, pendingApproval] of [...this.pendingApprovals.entries()]) {
+			if (pendingApproval.sessionId !== sessionId) {
+				continue;
+			}
+			this.resolveApproval(requestId, "cancel");
+		}
+
+		for (const [toolCallId, tool] of record.toolStates.entries()) {
+			if (tool.status === "completed" || tool.status === "failed") {
+				continue;
+			}
+
+			const nextTool = updateToolMessageState(tool, {
+				status: "failed",
+				output: cancellationToolOutput(reason),
+			});
+			record.toolStates.set(toolCallId, nextTool);
+			const messageId = record.toolMessageIds.get(toolCallId);
+			if (messageId) {
+				this.callbacks.patchMessage(sessionId, messageId, {
+					tool: nextTool,
+					time: formatTime(),
+				});
+			}
+		}
+
+		record.toolMessageIds.clear();
+		record.toolStates.clear();
+		record.streamingAssistantMessageId = undefined;
+		record.streamingReasoningMessageId = undefined;
+	}
+
 	private resolveSelection(selection: RuntimeSelection): { profile: ProviderProfile; modelId: string; apiKey: string } {
 		const profileId = selection.profileId ?? this.profileService.getActiveSelection().profileId;
 		if (!profileId) {
@@ -565,6 +688,14 @@ export class WepsAgentRuntime {
 			time: formatTime(),
 			kind: "status",
 		});
+	}
+
+	private applyRecoveryState(sessionId: string, record: RuntimeSessionRecord, message: string, fallbackLabel: string): void {
+		const hint = getRuntimeRecoveryHint(message);
+		this.setRuntimeState(sessionId, record, createErrorRuntimeState(hint?.label ?? fallbackLabel, message));
+		if (hint?.nextStep) {
+			this.appendSystemMessage(sessionId, record, hint.nextStep);
+		}
 	}
 
 	private appendToolMessage(sessionId: string, record: RuntimeSessionRecord, tool: ToolMessageState): string {
@@ -663,6 +794,25 @@ export class WepsAgentRuntime {
 			return undefined;
 		}
 
+		if (this.currentMode === "read-only") {
+			const reason = `${toolName} was blocked because read-only mode is active.`;
+			this.appendSystemMessage(sessionId, record, reason);
+			this.patchToolState(sessionId, record, toolCallId, toolName, {
+				status: "failed",
+				args,
+				output: cancellationToolOutput(reason),
+			});
+			return {
+				block: true,
+				reason,
+			};
+		}
+
+		if (this.currentMode === "auto-approve") {
+			this.appendSystemMessage(sessionId, record, `Auto-approved ${toolName} in auto-approve mode.`);
+			return undefined;
+		}
+
 		this.patchToolState(sessionId, record, toolCallId, toolName, {
 			status: "awaiting_approval",
 			args,
@@ -709,6 +859,12 @@ export class WepsAgentRuntime {
 			this.setRuntimeState(sessionId, record, createRunningRuntimeState());
 			return undefined;
 		}
+
+		this.patchToolState(sessionId, record, toolCallId, toolName, {
+			status: "failed",
+			args,
+			output: cancellationToolOutput(toolApprovalDecisionReason(decision, request)),
+		});
 
 		return {
 			block: true,
@@ -825,14 +981,10 @@ export class WepsAgentRuntime {
 						this.setRuntimeState(
 							sessionId,
 							record,
-							createInterruptedRuntimeState("Interrupted · ready", "The current request was cancelled."),
+							createInterruptedRuntimeState("Interrupted - ready", "The current request was cancelled."),
 						);
 					} else if (finalMessage.stopReason === "error" && finalMessage.errorMessage) {
-						this.setRuntimeState(
-							sessionId,
-							record,
-							createErrorRuntimeState("Request failed · ready", finalMessage.errorMessage),
-						);
+						this.applyRecoveryState(sessionId, record, finalMessage.errorMessage, "Request failed - ready");
 					}
 				}
 				return;
@@ -898,16 +1050,12 @@ export class WepsAgentRuntime {
 
 			case "auto_compaction_end":
 				if (event.errorMessage) {
-					this.setRuntimeState(
-						sessionId,
-						record,
-						createErrorRuntimeState("Compaction failed · ready", event.errorMessage),
-					);
+					this.applyRecoveryState(sessionId, record, event.errorMessage, "Compaction failed - ready");
 				} else if (event.aborted) {
 					this.setRuntimeState(
 						sessionId,
 						record,
-						createInterruptedRuntimeState("Compaction cancelled · ready", "You can continue with a new prompt."),
+						createInterruptedRuntimeState("Compaction cancelled - ready", "You can continue with a new prompt."),
 					);
 				} else if (event.willRetry) {
 					this.setRuntimeState(
@@ -954,10 +1102,16 @@ export class WepsAgentRuntime {
 						sessionId,
 						record,
 						finalError.toLowerCase().includes("cancel")
-							? createInterruptedRuntimeState("Retry cancelled · ready", finalError)
-							: createErrorRuntimeState("Retry failed · ready", finalError),
+							? createInterruptedRuntimeState("Retry cancelled - ready", finalError)
+							: createErrorRuntimeState("Retry failed - ready", finalError),
 					);
 					this.appendSystemMessage(sessionId, record, `Retry failed: ${finalError}`);
+					if (!finalError.toLowerCase().includes("cancel")) {
+						const hint = getRuntimeRecoveryHint(finalError);
+						if (hint?.nextStep) {
+							this.appendSystemMessage(sessionId, record, hint.nextStep);
+						}
+					}
 				} else if (record.activePrompts > 0) {
 					this.setRuntimeState(sessionId, record, createRunningRuntimeState());
 				}

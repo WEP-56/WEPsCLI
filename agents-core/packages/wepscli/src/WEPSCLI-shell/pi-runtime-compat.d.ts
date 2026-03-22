@@ -142,9 +142,20 @@ declare module "@mariozechner/pi-coding-agent" {
 		| { type: "turn_start" }
 		| { type: "turn_end"; message: UserMessage | AssistantMessage | ToolResultMessage; toolResults: ToolResultMessage[] };
 
-	export interface AgentSession {
+export interface AgentSession {
 		readonly agent: {
 			waitForIdle(): Promise<void>;
+			setBeforeToolCall?(
+				handler:
+					| ((
+							context: {
+								toolCall: { id: string; name: string; arguments: unknown };
+								args: unknown;
+							},
+							signal?: AbortSignal,
+					  ) => Promise<{ block?: boolean; reason?: string } | undefined>)
+					| undefined,
+			): void;
 		};
 		readonly sessionManager: {
 			getSessionFile(): string | undefined;
@@ -190,6 +201,12 @@ declare module "@mariozechner/pi-coding-agent" {
 			onError?: (error: ExtensionError) => void;
 		}): Promise<void>;
 		subscribe(listener: (event: AgentSessionEvent) => void): () => void;
+		compact?(customInstructions?: string): Promise<{
+			summary: string;
+			firstKeptEntryId: string;
+			tokensBefore: number;
+			details?: unknown;
+		}>;
 		abort(): Promise<void>;
 		abortCompaction?(): void;
 		dispose(): void;

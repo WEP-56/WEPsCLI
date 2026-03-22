@@ -8,6 +8,7 @@ import { WepsAgentRuntime, type RuntimeSelection } from "./agent-runtime.js";
 import { writeShellDebugLog } from "./debug-log.js";
 import { executeSlashCommand, getSlashCommands } from "./slash-commands.js";
 import { createIdleRuntimeState, runtimeStateTone, type RuntimeSessionState } from "./runtime-status.js";
+import { applyShellModePrompt, getShellMode, nextShellMode, shellModeSwitchMessage, type ShellModeId } from "./shell-modes.js";
 import { providerFamilyColor, wepscliShellTheme as theme } from "./theme.js";
 import type { ToolApprovalDecision, ToolApprovalRequest } from "./tool-approval.js";
 import type { OverlayKind, OverlayOption, ShellFocus, ShellView } from "./types.js";
@@ -44,6 +45,7 @@ export function WEPSCLIShellApp(props: { profileService: ProviderProfileService;
 	const [modelPickerProfileId, setModelPickerProfileId] = createSignal<string | undefined>(selection().profileId);
 	const [sessions, setSessions] = createSignal(sessionHistory.ensureSeed(INITIAL_SESSIONS));
 	const [composerValue, setComposerValue] = createSignal("");
+	const [shellMode, setShellMode] = createSignal<ShellModeId>("agent");
 	const [activeSessionId, setActiveSessionId] = createSignal<string | undefined>(undefined);
 	const [messagesBySession, setMessagesBySession] = createSignal<Record<string, ChatMessage[]>>({});
 	const [runtimeStateBySession, setRuntimeStateBySession] = createSignal<Record<string, RuntimeSessionState>>({});
@@ -99,6 +101,7 @@ export function WEPSCLIShellApp(props: { profileService: ProviderProfileService;
 	}));
 	const showSidebar = createMemo(() => false);
 	const shellReady = createMemo(() => profiles().length > 0);
+	const activeShellMode = createMemo(() => getShellMode(shellMode()));
 
 	const activeProfile = createMemo(() => {
 		const current = selection().profileId;
@@ -169,6 +172,10 @@ export function WEPSCLIShellApp(props: { profileService: ProviderProfileService;
 	onMount(() => {
 		writeShellDebugLog(`mounted chat shell profiles=${profiles().length} sessions=${sessionHistory.listSessions().length}`);
 		setTimeout(() => composerRef?.focus(), 10);
+	});
+
+	createEffect(() => {
+		runtime.setMode(shellMode());
 	});
 
 	createEffect(() => {
@@ -282,6 +289,26 @@ export function WEPSCLIShellApp(props: { profileService: ProviderProfileService;
 			return;
 		}
 
+		if (evt.option && evt.name === "m") {
+			evt.preventDefault();
+			applyShellMode(nextShellMode(shellMode()));
+			return;
+		}
+
+		if (evt.option && ["1", "2", "3", "4"].includes(evt.name)) {
+			evt.preventDefault();
+			const nextMode = ({
+				"1": "agent",
+				"2": "plan",
+				"3": "read-only",
+				"4": "auto-approve",
+			} as Record<string, ShellModeId>)[evt.name];
+			if (nextMode) {
+				applyShellMode(nextMode);
+			}
+			return;
+		}
+
 		if (evt.name === "tab") {
 			evt.preventDefault();
 			cycleFocus();
@@ -375,6 +402,52 @@ export function WEPSCLIShellApp(props: { profileService: ProviderProfileService;
 				kind: "status",
 			});
 		}
+	}
+
+	async function compactCurrentSession(): Promise<void> {
+		const session = currentSession();
+		if (!session) {
+			const sessionId = createdTransientSessionId();
+			pushChatMessage(sessionId, {
+				id: `${sessionId}:system:${Date.now()}`,
+				role: "system",
+				content: "No active session is ready to compact yet.",
+				time: new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }),
+				kind: "status",
+			});
+			return;
+		}
+
+		await runtime.compact(session.id, selectionForSession(session), {
+			runtimeSessionFile: session.runtimeSessionFile,
+		});
+	}
+
+	function applyShellMode(nextMode: ShellModeId): void {
+		if (shellMode() === nextMode) {
+			const sessionId = currentSession()?.id ?? createdTransientSessionId();
+			pushChatMessage(sessionId, {
+				id: `${sessionId}:system:${Date.now()}`,
+				role: "system",
+				content: `Already in ${getShellMode(nextMode).label} mode.`,
+				time: new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }),
+				kind: "status",
+			});
+			return;
+		}
+
+		setShellMode(nextMode);
+		const sessionId = currentSession()?.id ?? createdTransientSessionId();
+		pushChatMessage(sessionId, {
+			id: `${sessionId}:system:${Date.now()}`,
+			role: "system",
+			content: shellModeSwitchMessage(nextMode),
+			time: new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }),
+			kind: "status",
+		});
+		composerRef?.focus();
+		setFocusRegion("composer");
+		requestRender();
 	}
 
 	function openApprovalRequest(request: ToolApprovalRequest): void {
@@ -647,7 +720,7 @@ export function WEPSCLIShellApp(props: { profileService: ProviderProfileService;
 		setComposerValue("");
 		composerRef?.setText?.("");
 		composerRef?.focus();
-		void runtime.prompt(session.id, trimmed, selectionForSession(session), {
+		void runtime.prompt(session.id, applyShellModePrompt(shellMode(), trimmed), selectionForSession(session), {
 			runtimeSessionFile: session.runtimeSessionFile,
 		});
 		requestRender();
@@ -658,8 +731,24 @@ export function WEPSCLIShellApp(props: { profileService: ProviderProfileService;
 			startNewSession,
 			openOverlay,
 			openProviderAdd,
+			compactCurrentSession,
 			abortActiveRequest: () => {
 				void abortActiveRequest();
+			},
+			setMode: (modeId) => applyShellMode(modeId),
+			getCurrentMode: () => shellMode(),
+			getStatusSummary: () => {
+				const session = currentSession();
+				const runtimeState = currentRuntimeState();
+				return [
+					"Current shell status:",
+					`Session: ${session?.title ?? "none"}`,
+					`Mode: ${activeShellMode().label}`,
+					`Provider: ${activeProfile()?.label ?? "none"}`,
+					`Model: ${activeModel() ?? "none"}`,
+					`Runtime: ${runtimeState.label}`,
+					`Agent dir: ${getAgentDir()}`,
+				].join("\n");
 			},
 			queuePromptTemplate: (title: string, prompt: string, summary: string) => {
 				const session = currentSession() ?? startNewSession();
@@ -857,12 +946,15 @@ export function WEPSCLIShellApp(props: { profileService: ProviderProfileService;
 				value={composerValue()}
 				providerLabel={activeProfile()?.label ?? "No provider"}
 				modelLabel={activeModel() ?? "No model"}
+				modeLabel={activeShellMode().composerLabel}
+				modeTone={activeShellMode().tone}
 				inputRef={(ref) => {
 					composerRef = ref;
 				}}
 				onAction={activateAction}
 				onFocus={() => setFocusRegion("composer")}
 				onInput={(value) => setComposerValue(value)}
+				onModeClick={() => applyShellMode(nextShellMode(shellMode()))}
 				onSubmit={handleComposerSubmit}
 				onSelectSlashCommand={runSlashCommand}
 			/>

@@ -1,3 +1,5 @@
+import { Show } from "solid-js";
+import { FileChangeCardList } from "./file-change-preview.js";
 import type { ToolApprovalDecision, ToolApprovalRequest } from "./tool-approval.js";
 import { wepscliShellTheme as theme } from "./theme.js";
 
@@ -41,14 +43,33 @@ export function ApprovalOverlay(props: {
 					<text fg={theme.accent}>Request Summary</text>
 					<text fg={theme.text} wrapMode="word">{props.request.summary}</text>
 				</box>
-				<box backgroundColor={theme.panel} border={["top", "right", "bottom", "left"]} borderColor={theme.border} padding={1} flexDirection="column" gap={1}>
-					<text fg={theme.accent}>Arguments</text>
-					<scrollbox maxHeight={12}>
-						<box flexDirection="column" gap={1}>
-							<text fg={theme.text} wrapMode="word">{props.request.argsText}</text>
-						</box>
-					</scrollbox>
-				</box>
+				<Show when={props.request.commandText}>
+					<box backgroundColor={theme.panel} border={["top", "right", "bottom", "left"]} borderColor={theme.border} padding={1} flexDirection="column" gap={1}>
+						<text fg={theme.accent}>Command</text>
+						<scrollbox maxHeight={8}>
+							<box flexDirection="column" gap={1}>
+								<text fg={theme.text} wrapMode="word">{props.request.commandText}</text>
+							</box>
+						</scrollbox>
+					</box>
+				</Show>
+				<Show when={props.request.fileChanges.length > 0}>
+					<box backgroundColor={theme.panel} border={["top", "right", "bottom", "left"]} borderColor={theme.border} padding={1} flexDirection="column" gap={1}>
+						<scrollbox maxHeight={18}>
+							<FileChangeCardList changes={props.request.fileChanges} title="File Changes" />
+						</scrollbox>
+					</box>
+				</Show>
+				<Show when={!props.request.commandText && props.request.fileChanges.length === 0}>
+					<box backgroundColor={theme.panel} border={["top", "right", "bottom", "left"]} borderColor={theme.border} padding={1} flexDirection="column" gap={1}>
+						<text fg={theme.accent}>Arguments</text>
+						<scrollbox maxHeight={12}>
+							<box flexDirection="column" gap={1}>
+								<text fg={theme.text} wrapMode="word">{props.request.argsText}</text>
+							</box>
+						</scrollbox>
+					</box>
+				</Show>
 				<box flexDirection="row" gap={1}>
 					{APPROVAL_OPTIONS.map((option, index) => (
 						<box
