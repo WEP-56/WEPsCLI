@@ -86,7 +86,8 @@
 ### 质量与结构
 
 - [x] `TODO.md` 规范化
-- [x] `shell-app.tsx` 压回 800 行以内
+- [ ] `shell-app.tsx` 压回 800 行以内（暂缓：本轮不继续在其上加料）
+- [ ] `agent-runtime.ts` 压回 800 行以内（暂缓：本轮不继续在其上加料）
 - [x] `node ./scripts/build.mjs` 可通过
 - [x] `npx tsc -p tsconfig.build.json --noEmit` 可通过
 
@@ -94,15 +95,15 @@
 
 ### P1 工具执行主链路
 
-状态: 进行中
+状态: 当前阶段已完成
 
 - [x] 完整接入 `tool_execution_start / update / end`
 - [x] 工具卡片基础呈现
 - [x] tool / thought 降级呈现，避免淹没主对话
-- [ ] 文件改动摘要更清楚
-- [ ] diff 呈现
-- [ ] tool 详情层继续打磨
-- [ ] tool 完成后的结果归纳
+- [x] 文件改动摘要更清楚
+- [x] diff 呈现
+- [x] tool 详情层继续打磨
+- [x] tool 完成后的结果归纳
 
 验收标准:
 
@@ -146,12 +147,13 @@
 状态: 部分完成
 
 - [x] `/provider add`
-- [x] `/model` 打开两层 picker
-- [ ] `/review`
-- [ ] `/debug`
-- [ ] `/sessions`
+- [x] `/models` 打开两层 picker
+- [x] `/review`
+- [x] `/debug`
+- [x] `/sessions`
 - [ ] `/compact`
 - [ ] 其他高频命令
+- [ ] slash command 执行后的状态反馈与结果回显继续收口
 
 ### P6 右侧状态 / 上下文面板
 
@@ -163,11 +165,11 @@
 
 ### P7 diff / 文件改动呈现
 
-状态: 待做
+状态: 已完成当前最小闭环
 
-- [ ] 展示文件改动摘要
-- [ ] 查看 diff
-- [ ] 与 tool 结果形成闭环
+- [x] 展示文件改动摘要
+- [x] 查看 diff
+- [x] 与 tool 结果形成闭环
 
 ### P8 多会话一致性
 
@@ -199,12 +201,11 @@
 
 ## 当前下一步
 
-当前回到 `P1 工具执行主链路`，优先补:
+当前切到 `P5 Slash Commands 实功能化`，优先补:
 
-- 文件改动摘要
-- diff 呈现
-- tool 详情层继续打磨
-- tool 完成结果归纳
+- `/compact`
+- 现有 slash commands 的执行反馈与结果回显收口
+- 补其他高频命令，并保持键盘 / 鼠标路径一致
 
 ## 执行顺序
 

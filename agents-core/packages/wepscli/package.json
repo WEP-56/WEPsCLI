@@ -24,6 +24,7 @@
 		"smoke:shell-min": "bun --conditions=browser --preload @opentui/solid/preload ./smoke/shell-min.tsx",
 		"smoke:approval-flow": "bun ./smoke/approval-flow.ts",
 		"smoke:interrupt-status": "bun ./smoke/interrupt-status.ts",
+		"smoke:tool-file-changes": "bun ./smoke/tool-file-changes.ts",
 		"smoke:tool-events": "bun ./smoke/tool-events.ts",
 		"prepublishOnly": "npm run clean && npm run build"
 	},

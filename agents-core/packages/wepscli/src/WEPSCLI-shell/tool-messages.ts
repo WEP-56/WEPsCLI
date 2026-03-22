@@ -1,3 +1,11 @@
+import {
+	extractToolFileChanges,
+	formatToolDiffDeltaStats,
+	formatToolDiffStats,
+	toolFileChangeLocation,
+	type ToolFileChange,
+} from "./tool-file-changes.js";
+
 export type ToolMessageStatus = "awaiting_approval" | "running" | "completed" | "failed";
 
 export interface ToolMessageState {
@@ -6,6 +14,9 @@ export interface ToolMessageState {
 	status: ToolMessageStatus;
 	argsText: string;
 	outputText: string;
+	fileChanges: ToolFileChange[];
+	rawArgs?: unknown;
+	rawOutput?: unknown;
 }
 
 type ContentBlock = {
@@ -94,6 +105,8 @@ export function createToolMessageState(toolCallId: string, toolName: string, arg
 		status: "running",
 		argsText: formatToolArgs(args),
 		outputText: "",
+		fileChanges: extractToolFileChanges(toolName, args, undefined),
+		rawArgs: args,
 	};
 }
 
@@ -105,14 +118,34 @@ export function updateToolMessageState(
 		output?: unknown;
 	},
 ): ToolMessageState {
-	const nextArgsText = update.args === undefined ? tool.argsText : formatToolArgs(update.args);
-	const nextOutputText = update.output === undefined ? tool.outputText : formatToolOutput(update.output);
+	const nextRawArgs = update.args === undefined ? tool.rawArgs : update.args;
+	const nextRawOutput = update.output === undefined ? tool.rawOutput : update.output;
+	const nextArgsText = nextRawArgs === undefined ? tool.argsText : formatToolArgs(nextRawArgs);
+	const nextOutputText = nextRawOutput === undefined ? tool.outputText : formatToolOutput(nextRawOutput);
+	const nextFileChanges = extractToolFileChanges(tool.toolName, nextRawArgs, nextRawOutput).map((change, index) => {
+		const previousChange = tool.fileChanges[index];
+		if (!previousChange || previousChange.kind !== change.kind || previousChange.path !== change.path) {
+			return change;
+		}
+
+		return {
+			...change,
+			firstChangedLine: change.firstChangedLine ?? previousChange.firstChangedLine,
+			diffText: change.diffText ?? previousChange.diffText,
+			diffLines: change.diffLines ?? previousChange.diffLines,
+			diffStats: change.diffStats ?? previousChange.diffStats,
+			previewText: change.previewText ?? previousChange.previewText,
+		};
+	});
 
 	return {
 		...tool,
 		status: update.status ?? tool.status,
 		argsText: nextArgsText || tool.argsText,
 		outputText: nextOutputText || tool.outputText,
+		fileChanges: nextFileChanges.length > 0 ? nextFileChanges : tool.fileChanges,
+		rawArgs: nextRawArgs,
+		rawOutput: nextRawOutput,
 	};
 }
 
@@ -143,6 +176,13 @@ export function toolStatusTone(status: ToolMessageStatus): "accent" | "success" 
 }
 
 export function toolCardPreview(tool: ToolMessageState): string {
+	const firstFileChange = tool.fileChanges[0];
+	if (firstFileChange && tool.status === "completed") {
+		const heading = `${tool.toolName} ${toolFileChangeLocation(firstFileChange)}`;
+		const diffStats = formatToolDiffDeltaStats(firstFileChange.diffStats);
+		return [heading, diffStats].filter(Boolean).join("\n");
+	}
+
 	const lines: string[] = [`${toolStatusLabel(tool.status)}: ${tool.toolName}`];
 	const outputLine = firstNonEmptyLine(tool.outputText);
 	const argsLine = firstNonEmptyLine(tool.argsText);
@@ -163,6 +203,32 @@ export function toolCardPreview(tool: ToolMessageState): string {
 }
 
 export function toolDetailText(tool: ToolMessageState): string {
+	if (tool.fileChanges.length > 0) {
+		const fileChangeDetails = tool.fileChanges.flatMap((change) => [
+			`${change.kind.toUpperCase()}: ${toolFileChangeLocation(change)}`,
+			change.summary,
+			change.kind === "edit" && formatToolDiffStats(change.diffStats)
+				? `Stats: ${formatToolDiffStats(change.diffStats)}`
+				: undefined,
+			change.diffText ? "Diff:" : undefined,
+			change.diffText,
+			!change.diffText && change.previewText ? "Preview:" : undefined,
+			!change.diffText ? change.previewText : undefined,
+			"",
+		]);
+
+		return [
+			`Tool: ${tool.toolName}`,
+			`Status: ${toolStatusLabel(tool.status)}`,
+			`Call ID: ${tool.toolCallId}`,
+			"",
+			"File Changes:",
+			...fileChangeDetails,
+		]
+			.filter(Boolean)
+			.join("\n");
+	}
+
 	return [
 		`Tool: ${tool.toolName}`,
 		`Status: ${toolStatusLabel(tool.status)}`,

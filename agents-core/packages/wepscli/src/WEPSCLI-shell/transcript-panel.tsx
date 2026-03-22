@@ -2,7 +2,9 @@ import { For, Show } from "solid-js";
 import type { ChatMessage } from "./chat-components.js";
 import { truncate } from "./helpers.js";
 import { wepscliShellTheme as theme } from "./theme.js";
-import { toolDetailText, toolStatusLabel, toolStatusTone } from "./tool-messages.js";
+import { toolFileChangeLocation } from "./tool-file-changes.js";
+import { toolStatusLabel, toolStatusTone } from "./tool-messages.js";
+import { ToolMessageDetail } from "./tool-message-detail.js";
 
 const COLLAPSIBLE_MESSAGE_LINES = 3;
 
@@ -90,11 +92,42 @@ function inlineSummary(message: ChatMessage, width: number): string {
 	return truncate(`${inlinePrefix(message)} | ${inlineSnippet(message)}`, maxLength);
 }
 
-function expandedContent(message: ChatMessage): string {
-	if (message.kind === "tool" && message.tool) {
-		return toolDetailText(message.tool);
+function toolInlineLabel(message: ChatMessage, width: number): string {
+	const tool = message.tool;
+	if (!tool) {
+		return inlineSummary(message, width);
 	}
-	return message.content;
+
+	const firstFileChange = tool.fileChanges[0];
+	if (!firstFileChange) {
+		return inlineSummary(message, width);
+	}
+
+	const reserved = Math.max(16, Math.floor(width * 0.22));
+	const maxLength = Math.max(24, width - reserved);
+	return truncate(`${tool.toolName} ${toolFileChangeLocation(firstFileChange)}`, maxLength);
+}
+
+function toolInlineDiffStats(message: ChatMessage): { added?: string; removed?: string } | undefined {
+	const tool = message.tool;
+	const firstFileChange = tool?.fileChanges[0];
+	if (!tool || !firstFileChange) {
+		return undefined;
+	}
+
+	const stats = firstFileChange.diffStats;
+	return {
+		added: stats?.added ? `+${stats.added}` : undefined,
+		removed: stats?.removed ? `-${stats.removed}` : undefined,
+	};
+}
+
+function useStructuredToolSummary(message: ChatMessage): boolean {
+	return (
+		message.kind === "tool" &&
+		message.tool?.status === "completed" &&
+		!!message.tool.fileChanges[0]
+	);
 }
 
 export function TranscriptPanel(props: {
@@ -138,12 +171,28 @@ export function TranscriptPanel(props: {
 										onMouseUp={() => props.onToggleMessage(message.id)}
 									>
 										<box flexDirection="row" justifyContent="space-between" gap={1}>
-											<text fg={transcriptRoleColor(message)}>{inlineSummary(message, props.width)}</text>
+											{useStructuredToolSummary(message) ? (
+												<box flexDirection="row" gap={1} flexGrow={1} minWidth={0}>
+													<text fg={transcriptRoleColor(message)}>{toolInlineLabel(message, props.width)}</text>
+													<Show when={toolInlineDiffStats(message)?.added}>
+														<text fg={theme.success}>{toolInlineDiffStats(message)!.added}</text>
+													</Show>
+													<Show when={toolInlineDiffStats(message)?.removed}>
+														<text fg={theme.danger}>{toolInlineDiffStats(message)!.removed}</text>
+													</Show>
+												</box>
+											) : (
+												<text fg={transcriptRoleColor(message)}>{inlineSummary(message, props.width)}</text>
+											)}
 											<text fg={theme.muted}>{message.expanded ? "hide" : "more"} {truncate(message.time, 8)}</text>
 										</box>
 										<Show when={message.expanded}>
 											<box paddingLeft={1} paddingBottom={1}>
-												<text fg={theme.text} wrapMode="word">{expandedContent(message)}</text>
+												{message.kind === "tool" && message.tool ? (
+													<ToolMessageDetail tool={message.tool} />
+												) : (
+													<text fg={theme.text} wrapMode="word">{message.content}</text>
+												)}
 											</box>
 										</Show>
 									</box>
