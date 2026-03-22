@@ -1,230 +1,49 @@
 import { join } from "node:path";
-import type {
-	AuthStorage,
-	AgentSession,
-	AgentSessionEvent,
-	ModelRegistry,
-	SessionManager,
-	SettingsManager,
-} from "@mariozechner/pi-coding-agent";
-import type { AssistantMessage, Model, UserMessage } from "@mariozechner/pi-ai";
+import type { AgentSession, AgentSessionEvent, AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
+import type { Model } from "@mariozechner/pi-ai";
 import { getAgentDir } from "../config.js";
 import type { DiscoveredModel, ProviderProfile, ProviderProfileService } from "../provider-profiles/index.js";
+import { handleAgentSessionEvent } from "./agent-runtime-events.js";
+import {
+	cancellationToolOutput,
+	createMessageId,
+	extractAssistantReasoning,
+	extractAssistantVisibleText,
+	extractUserText,
+	formatCompactionResultMessage,
+	formatRuntimeError,
+	formatTime,
+	getRuntimeSessionDir,
+	installBeforeToolCallHook,
+	loadCodingAgentRuntime,
+	toModelDefinition,
+} from "./agent-runtime-helpers.js";
+import type {
+	PendingApprovalRecord,
+	RuntimeCallbacks,
+	RuntimeSelection,
+	RuntimeSessionBinding,
+	RuntimeSessionRecord,
+} from "./agent-runtime-types.js";
 import type { ChatMessage } from "./chat-components.js";
 import {
 	createCompactingRuntimeState,
 	createErrorRuntimeState,
 	createIdleRuntimeState,
 	createInterruptedRuntimeState,
-	createRetryingRuntimeState,
 	createRunningRuntimeState,
 	type RuntimeSessionState,
 } from "./runtime-status.js";
 import { getRuntimeRecoveryHint } from "./runtime-recovery.js";
 import type { ShellModeId } from "./shell-modes.js";
-import type { TranscriptMessagePatch } from "./transcript-state.js";
 import {
 	createToolApprovalRequest,
 	toolApprovalDecisionReason,
 	type ToolApprovalDecision,
-	type ToolApprovalRequest,
 } from "./tool-approval.js";
 import { createToolMessageState, updateToolMessageState, type ToolMessageState } from "./tool-messages.js";
 
-export interface RuntimeSelection {
-	profileId?: string;
-	modelId?: string;
-}
-
-interface RuntimeCallbacks {
-	appendMessage(sessionId: string, message: ChatMessage): void;
-	insertMessageBefore(sessionId: string, beforeMessageId: string, message: ChatMessage): void;
-	replaceMessages(sessionId: string, messages: ChatMessage[]): void;
-	patchMessage(sessionId: string, messageId: string, patch: TranscriptMessagePatch): void;
-	openApproval(sessionId: string, request: ToolApprovalRequest): void;
-	closeApproval(sessionId: string, requestId: string): void;
-	updateRuntimeState(sessionId: string, state: RuntimeSessionState): void;
-	updateSessionBinding(sessionId: string, binding: { runtimeSessionFile?: string }): void;
-}
-
-interface RuntimeSessionRecord {
-	session: AgentSession;
-	unsubscribe: () => void;
-	removeBeforeToolCallHook: () => void;
-	modelRegistry: ModelRegistry;
-	authStorage: AuthStorage;
-	activeProfileId?: string;
-	activeModelId?: string;
-	streamingAssistantMessageId?: string;
-	streamingReasoningMessageId?: string;
-	toolMessageIds: Map<string, string>;
-	toolStates: Map<string, ToolMessageState>;
-	activePrompts: number;
-	runtimeState: RuntimeSessionState;
-	sequence: number;
-}
-
-interface PendingApprovalRecord {
-	sessionId: string;
-	resolve: (decision: ToolApprovalDecision) => void;
-}
-
-interface RuntimeSessionBinding {
-	runtimeSessionFile?: string;
-}
-
-type BeforeToolCallHandler = (
-	context: {
-		toolCall: { id: string; name: string; arguments: unknown };
-		args: unknown;
-	},
-	signal?: AbortSignal,
-) => Promise<{ block?: boolean; reason?: string } | undefined>;
-
-type ProviderRegistrationConfig = Parameters<ModelRegistry["registerProvider"]>[1];
-type ProviderModelDefinition = NonNullable<ProviderRegistrationConfig["models"]>[number];
-type CodingAgentRuntime = {
-	AuthStorage: typeof import("@mariozechner/pi-coding-agent").AuthStorage;
-	createAgentSession: typeof import("@mariozechner/pi-coding-agent").createAgentSession;
-	ModelRegistry: typeof import("@mariozechner/pi-coding-agent").ModelRegistry;
-	SessionManager: typeof import("@mariozechner/pi-coding-agent").SessionManager;
-	SettingsManager: typeof import("@mariozechner/pi-coding-agent").SettingsManager;
-};
-
-let codingAgentRuntimePromise: Promise<CodingAgentRuntime> | undefined;
-
-async function loadCodingAgentRuntime(): Promise<CodingAgentRuntime> {
-	if (!codingAgentRuntimePromise) {
-		codingAgentRuntimePromise = import("@mariozechner/pi-coding-agent").then((module) => module as CodingAgentRuntime);
-	}
-	return codingAgentRuntimePromise;
-}
-
-function formatTime(timestamp?: number): string {
-	return new Date(timestamp ?? Date.now()).toLocaleTimeString("en-US", {
-		hour: "2-digit",
-		minute: "2-digit",
-	});
-}
-
-function createMessageId(record: RuntimeSessionRecord, role: ChatMessage["role"]): string {
-	record.sequence += 1;
-	return `runtime:${role}:${record.sequence}`;
-}
-
-function guessReasoningSupport(modelId: string): boolean {
-	const value = modelId.toLowerCase();
-	return [
-		"gpt-5",
-		"gpt-4.1",
-		"o1",
-		"o3",
-		"o4",
-		"claude-3-7",
-		"claude-sonnet-4",
-		"claude-opus-4",
-		"gemini-2.5",
-		"reasoner",
-		"thinking",
-	].some((token) => value.includes(token));
-}
-
-function extractTextBlocks(content: Array<{ type: string; [key: string]: unknown }>): string {
-	return content
-		.map((item) => {
-			if (item.type === "text" && typeof item.text === "string") {
-				return item.text;
-			}
-			if (item.type === "image") {
-				return "[image]";
-			}
-			if (item.type === "thinking" && typeof item.thinking === "string") {
-				return item.thinking;
-			}
-			return "";
-		})
-		.filter(Boolean)
-		.join("\n\n");
-}
-
-function extractUserText(message: UserMessage): string {
-	if (typeof message.content === "string") {
-		return message.content;
-	}
-	return extractTextBlocks(message.content as unknown as Array<{ type: string; [key: string]: unknown }>);
-}
-
-function extractAssistantVisibleText(message: AssistantMessage): string {
-	const text = extractTextBlocks(
-		message.content
-			.filter((item): item is Extract<AssistantMessage["content"][number], { type: "text" }> => item.type === "text")
-			.map((item) => ({ type: item.type, text: item.text })),
-	);
-	if (text) {
-		return text;
-	}
-	if (message.errorMessage) {
-		return message.errorMessage;
-	}
-	return "";
-}
-
-function extractAssistantReasoning(message: AssistantMessage): string {
-	return extractTextBlocks(
-		message.content
-			.filter((item): item is Extract<AssistantMessage["content"][number], { type: "thinking" }> => item.type === "thinking")
-			.map((item) => ({ type: item.type, thinking: item.thinking })),
-	);
-}
-
-function formatRuntimeError(error: unknown): string {
-	return error instanceof Error ? error.message : String(error);
-}
-
-function formatCompactionResultMessage(result: { tokensBefore?: number }): string {
-	if (typeof result.tokensBefore === "number" && Number.isFinite(result.tokensBefore)) {
-		return `Context compacted from ${result.tokensBefore.toLocaleString("en-US")} tokens.`;
-	}
-	return "Context compacted.";
-}
-
-function cancellationToolOutput(reason: string): { content: Array<{ type: "text"; text: string }> } {
-	return {
-		content: [{ type: "text", text: reason }],
-	};
-}
-
-function toModelDefinition(model: DiscoveredModel): ProviderModelDefinition {
-	return {
-		id: model.id,
-		name: model.name,
-		reasoning: guessReasoningSupport(model.id),
-		input: ["text", "image"],
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: 128_000,
-		maxTokens: 16_384,
-	};
-}
-
-function getRuntimeSessionDir(cwd: string, agentDir: string): string {
-	const safePath = `--${cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
-	return join(agentDir, "sessions", safePath);
-}
-
-function installBeforeToolCallHook(session: AgentSession, handler: BeforeToolCallHandler): () => void {
-	if (typeof session.addBeforeToolCall === "function") {
-		return session.addBeforeToolCall(handler);
-	}
-
-	if (typeof session.agent?.setBeforeToolCall === "function") {
-		session.agent.setBeforeToolCall(handler);
-		return () => {
-			session.agent.setBeforeToolCall?.(undefined);
-		};
-	}
-
-	throw new Error("The installed pi-coding-agent runtime does not expose a before-tool-call hook API.");
-}
+export type { RuntimeSelection } from "./agent-runtime-types.js";
 
 export class WepsAgentRuntime {
 	private readonly records = new Map<string, RuntimeSessionRecord>();
@@ -357,6 +176,33 @@ export class WepsAgentRuntime {
 		}
 	}
 
+	async reload(sessionId: string, selection: RuntimeSelection, binding: RuntimeSessionBinding = {}): Promise<boolean> {
+		const record = await this.ensureSession(sessionId, selection, binding);
+		const reloadableSession = record.session as AgentSession & { reload?: () => Promise<void> };
+		if (typeof reloadableSession.reload !== "function") {
+			this.appendSystemMessage(sessionId, record, "Resource reload is not available in the current runtime.");
+			this.setRuntimeState(sessionId, record, createErrorRuntimeState("Reload unavailable - ready"));
+			return false;
+		}
+
+		record.activePrompts += 1;
+		this.setRuntimeState(sessionId, record, createRunningRuntimeState("Reloading resources"));
+		try {
+			await this.applySelection(record, selection);
+			await reloadableSession.reload();
+			this.setRuntimeState(sessionId, record, createIdleRuntimeState());
+			return true;
+		} catch (error) {
+			const message = formatRuntimeError(error);
+			this.appendSystemMessage(sessionId, record, `Reload failed: ${message}`);
+			this.applyRecoveryState(sessionId, record, message, "Reload failed - ready");
+			return false;
+		} finally {
+			record.activePrompts = Math.max(0, record.activePrompts - 1);
+			this.resetRuntimeStateAfterActivity(sessionId, record);
+		}
+	}
+
 	setMode(mode: ShellModeId): void {
 		this.currentMode = mode;
 	}
@@ -443,7 +289,9 @@ export class WepsAgentRuntime {
 				fork: async () => ({ cancelled: true }),
 				navigateTree: async () => ({ cancelled: true }),
 				switchSession: async () => ({ cancelled: true }),
-				reload: async () => {},
+				reload: async () => {
+					await (session as AgentSession & { reload?: () => Promise<void> }).reload?.();
+				},
 			},
 			onError: (error) => {
 				const record = this.records.get(sessionId);
@@ -873,252 +721,18 @@ export class WepsAgentRuntime {
 	}
 
 	private handleSessionEvent(sessionId: string, record: RuntimeSessionRecord, event: AgentSessionEvent): void {
-		switch (event.type) {
-			case "message_start":
-				if (event.message.role === "user") {
-					const text = extractUserText(event.message as UserMessage);
-					if (text) {
-						this.callbacks.appendMessage(sessionId, {
-							id: createMessageId(record, "user"),
-							role: "user",
-							content: text,
-							time: formatTime((event.message as UserMessage).timestamp),
-						});
-					}
-					return;
-				}
-
-				if (event.message.role === "assistant") {
-					record.streamingAssistantMessageId = undefined;
-					record.streamingReasoningMessageId = undefined;
-				}
-				return;
-
-			case "message_update":
-				if (event.assistantMessageEvent.type === "thinking_delta") {
-					if (!record.streamingReasoningMessageId) {
-						record.streamingReasoningMessageId = record.streamingAssistantMessageId
-							? this.insertReasoningMessageBefore(
-									sessionId,
-									record,
-									record.streamingAssistantMessageId,
-									event.assistantMessageEvent.delta,
-								)
-							: (() => {
-									const id = createMessageId(record, "assistant");
-									this.callbacks.appendMessage(sessionId, {
-										id,
-										role: "assistant",
-										content: event.assistantMessageEvent.delta,
-										time: formatTime(),
-										kind: "reasoning",
-										collapsible: true,
-										expanded: false,
-									});
-									return id;
-								})();
-						return;
-					}
-					this.callbacks.patchMessage(sessionId, record.streamingReasoningMessageId, {
-						appendContent: event.assistantMessageEvent.delta,
-					});
-					return;
-				}
-
-				if (event.assistantMessageEvent.type === "text_delta" && record.streamingAssistantMessageId) {
-					this.callbacks.patchMessage(sessionId, record.streamingAssistantMessageId, {
-						appendContent: event.assistantMessageEvent.delta,
-					});
-					return;
-				}
-				if (event.assistantMessageEvent.type === "text_delta") {
-					const messageId = createMessageId(record, "assistant");
-					record.streamingAssistantMessageId = messageId;
-					this.callbacks.appendMessage(sessionId, {
-						id: messageId,
-						role: "assistant",
-						content: event.assistantMessageEvent.delta,
-						time: formatTime(),
-					});
-				}
-				return;
-
-			case "message_end":
-				if (event.message.role === "assistant") {
-					const finalMessage = event.message as AssistantMessage;
-					const content = extractAssistantVisibleText(finalMessage);
-					const reasoning = extractAssistantReasoning(finalMessage);
-					const messageId = record.streamingAssistantMessageId;
-					const reasoningMessageId = record.streamingReasoningMessageId;
-					record.streamingAssistantMessageId = undefined;
-					record.streamingReasoningMessageId = undefined;
-					if (messageId) {
-						this.callbacks.patchMessage(sessionId, messageId, {
-							content,
-							time: formatTime(finalMessage.timestamp),
-						});
-					} else if (content) {
-						this.callbacks.appendMessage(sessionId, {
-							id: createMessageId(record, "assistant"),
-							role: "assistant",
-							content,
-							time: formatTime(finalMessage.timestamp),
-						});
-					}
-					if (reasoning) {
-						if (reasoningMessageId) {
-							this.callbacks.patchMessage(sessionId, reasoningMessageId, {
-								content: reasoning,
-								time: formatTime(finalMessage.timestamp),
-							});
-						} else if (messageId) {
-							this.insertReasoningMessageBefore(sessionId, record, messageId, reasoning);
-						} else {
-							this.appendReasoningMessage(sessionId, record, reasoning);
-						}
-					}
-					if (finalMessage.stopReason === "aborted") {
-						this.setRuntimeState(
-							sessionId,
-							record,
-							createInterruptedRuntimeState("Interrupted - ready", "The current request was cancelled."),
-						);
-					} else if (finalMessage.stopReason === "error" && finalMessage.errorMessage) {
-						this.applyRecoveryState(sessionId, record, finalMessage.errorMessage, "Request failed - ready");
-					}
-				}
-				return;
-
-			case "tool_execution_start": {
-				const tool = createToolMessageState(event.toolCallId, event.toolName, event.args);
-				const messageId = this.appendToolMessage(sessionId, record, tool);
-				record.toolMessageIds.set(event.toolCallId, messageId);
-				record.toolStates.set(event.toolCallId, tool);
-				return;
-			}
-
-			case "tool_execution_update": {
-				const messageId = record.toolMessageIds.get(event.toolCallId);
-				const tool = record.toolStates.get(event.toolCallId);
-				if (!messageId || !tool) {
-					return;
-				}
-				const nextTool = updateToolMessageState(tool, {
-					args: event.args,
-					output: event.partialResult,
-				});
-				record.toolStates.set(event.toolCallId, nextTool);
-				this.callbacks.patchMessage(sessionId, messageId, {
-					tool: nextTool,
-				});
-				return;
-			}
-
-			case "tool_execution_end": {
-				const messageId = record.toolMessageIds.get(event.toolCallId);
-				const tool = record.toolStates.get(event.toolCallId);
-				record.toolMessageIds.delete(event.toolCallId);
-				record.toolStates.delete(event.toolCallId);
-				const nextTool = updateToolMessageState(
-					tool ?? createToolMessageState(event.toolCallId, event.toolName, undefined),
-					{
-						status: event.isError ? "failed" : "completed",
-						output: event.result,
-					},
-				);
-				if (messageId) {
-					this.callbacks.patchMessage(sessionId, messageId, {
-						tool: nextTool,
-						time: formatTime(),
-					});
-					return;
-				}
-				this.appendToolMessage(sessionId, record, nextTool);
-				return;
-			}
-
-			case "auto_compaction_start":
-				this.setRuntimeState(
-					sessionId,
-					record,
-					createCompactingRuntimeState(
-						event.reason === "overflow" ? "Compacting after overflow" : "Compacting context",
-					),
-				);
-				this.appendSystemMessage(sessionId, record, "Compacting context...");
-				return;
-
-			case "auto_compaction_end":
-				if (event.errorMessage) {
-					this.applyRecoveryState(sessionId, record, event.errorMessage, "Compaction failed - ready");
-				} else if (event.aborted) {
-					this.setRuntimeState(
-						sessionId,
-						record,
-						createInterruptedRuntimeState("Compaction cancelled - ready", "You can continue with a new prompt."),
-					);
-				} else if (event.willRetry) {
-					this.setRuntimeState(
-						sessionId,
-						record,
-						createRetryingRuntimeState("Retrying after compaction"),
-					);
-				} else if (record.activePrompts > 0) {
-					this.setRuntimeState(sessionId, record, createRunningRuntimeState());
-				}
-				this.appendSystemMessage(
-					sessionId,
-					record,
-					event.errorMessage
-						? `Compaction failed: ${event.errorMessage}`
-						: event.aborted
-							? "Compaction aborted."
-							: event.result
-								? "Context compacted."
-								: "Compaction skipped.",
-				);
-				return;
-
-			case "auto_retry_start":
-				this.setRuntimeState(
-					sessionId,
-					record,
-					createRetryingRuntimeState(
-						`Retrying (${event.attempt}/${event.maxAttempts})`,
-						event.errorMessage,
-					),
-				);
-				this.appendSystemMessage(
-					sessionId,
-					record,
-					`Retrying request (${event.attempt}/${event.maxAttempts}) after error: ${event.errorMessage}`,
-				);
-				return;
-
-			case "auto_retry_end":
-				if (!event.success) {
-					const finalError = event.finalError ?? "Retry cancelled";
-					this.setRuntimeState(
-						sessionId,
-						record,
-						finalError.toLowerCase().includes("cancel")
-							? createInterruptedRuntimeState("Retry cancelled - ready", finalError)
-							: createErrorRuntimeState("Retry failed - ready", finalError),
-					);
-					this.appendSystemMessage(sessionId, record, `Retry failed: ${finalError}`);
-					if (!finalError.toLowerCase().includes("cancel")) {
-						const hint = getRuntimeRecoveryHint(finalError);
-						if (hint?.nextStep) {
-							this.appendSystemMessage(sessionId, record, hint.nextStep);
-						}
-					}
-				} else if (record.activePrompts > 0) {
-					this.setRuntimeState(sessionId, record, createRunningRuntimeState());
-				}
-				return;
-
-			default:
-				return;
-		}
+		handleAgentSessionEvent(event, {
+			sessionId,
+			record,
+			callbacks: this.callbacks,
+			appendToolMessage: (tool) => this.appendToolMessage(sessionId, record, tool),
+			appendReasoningMessage: (content) => this.appendReasoningMessage(sessionId, record, content),
+			insertReasoningMessageBefore: (beforeMessageId, content) =>
+				this.insertReasoningMessageBefore(sessionId, record, beforeMessageId, content),
+			appendSystemMessage: (content) => this.appendSystemMessage(sessionId, record, content),
+			applyRecoveryState: (message, fallbackLabel) =>
+				this.applyRecoveryState(sessionId, record, message, fallbackLabel),
+			setRuntimeState: (state) => this.setRuntimeState(sessionId, record, state),
+		});
 	}
 }

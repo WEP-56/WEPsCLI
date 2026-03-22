@@ -1,18 +1,24 @@
-import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid";
-import { batch, createEffect, createMemo, createSignal, onMount } from "solid-js";
+import { useRenderer, useTerminalDimensions } from "@opentui/solid";
+import { createEffect, createMemo, createSignal, onMount } from "solid-js";
 import type { ProviderProfile, ProviderProfileService } from "../provider-profiles/index.js";
 import { SessionHistoryService } from "../session-history/session-history-service.js";
 import { getAgentDir } from "../config.js";
 import { ApprovalOverlay } from "./approval-overlay.js";
 import { WepsAgentRuntime, type RuntimeSelection } from "./agent-runtime.js";
 import { writeShellDebugLog } from "./debug-log.js";
-import { executeSlashCommand, getSlashCommands } from "./slash-commands.js";
-import { createIdleRuntimeState, runtimeStateTone, type RuntimeSessionState } from "./runtime-status.js";
-import { applyShellModePrompt, getShellMode, nextShellMode, shellModeSwitchMessage, type ShellModeId } from "./shell-modes.js";
-import { providerFamilyColor, wepscliShellTheme as theme } from "./theme.js";
+import { useShellKeyboard } from "./shell-keyboard.js";
+import { getSessionApprovalRequest, nextFocusRegionForSession } from "./session-consistency.js";
+import { createSkillAddFlow } from "../skills/skill-add-flow.js";
+import { formatInstalledSkillsSummary, listInstalledSkills } from "../skills/skill-service.js";
+import { createShellPromptController } from "./shell-prompt-controller.js";
+import { buildSkillSlashCommands } from "./skill-commands.js";
+import { createIdleRuntimeState, type RuntimeSessionState } from "./runtime-status.js";
+import { runtimeStatusColor } from "./shell-status.js";
+import { getShellMode, nextShellMode, shellModeSwitchMessage, type ShellModeId } from "./shell-modes.js";
+import { wepscliShellTheme as theme } from "./theme.js";
 import type { ToolApprovalDecision, ToolApprovalRequest } from "./tool-approval.js";
-import type { OverlayKind, OverlayOption, ShellFocus, ShellView } from "./types.js";
-import { formatTimestamp, INITIAL_SESSIONS, overlayDescription, overlayTitle, truncate, wrapIndex } from "./helpers.js";
+import type { OverlayKind, OverlayOption, ShellFocus, SlashCommandItem } from "./types.js";
+import { formatTimestamp, INITIAL_SESSIONS, overlayDescription, overlayTitle, truncate } from "./helpers.js";
 import { createProviderAddFlow } from "./provider-add-flow.js";
 import {
 	appendSessionMessage,
@@ -28,15 +34,11 @@ import {
 	type ChatMessage,
 	type ComposerInputRef,
 } from "./chat-components.js";
-
 const LOGO = "WEPsCLI";
-
 export function WEPSCLIShellApp(props: { profileService: ProviderProfileService; onExit: () => void }) {
 	const renderer = useRenderer();
 	const dimensions = useTerminalDimensions();
 	const sessionHistory = new SessionHistoryService();
-
-	const [view, setView] = createSignal<ShellView>("home");
 	const [focusRegion, setFocusRegionState] = createSignal<ShellFocus>("composer");
 	const [overlay, setOverlay] = createSignal<OverlayKind | undefined>(undefined);
 	const [profiles, setProfiles] = createSignal<ProviderProfile[]>(props.profileService.listProfiles());
@@ -51,6 +53,7 @@ export function WEPSCLIShellApp(props: { profileService: ProviderProfileService;
 	const [runtimeStateBySession, setRuntimeStateBySession] = createSignal<Record<string, RuntimeSessionState>>({});
 	const [approvalRequests, setApprovalRequests] = createSignal<ToolApprovalRequest[]>([]);
 	const [approvalDecisionIndex, setApprovalDecisionIndex] = createSignal(0);
+	const [skillSlashCommands, setSkillSlashCommands] = createSignal<SlashCommandItem[]>([]);
 	const runtime = new WepsAgentRuntime(props.profileService, {
 		appendMessage: (sessionId, message) => appendTranscriptMessage(sessionId, message),
 		insertMessageBefore: (sessionId, beforeMessageId, message) => insertTranscriptMessageBefore(sessionId, beforeMessageId, message),
@@ -61,15 +64,8 @@ export function WEPSCLIShellApp(props: { profileService: ProviderProfileService;
 		updateRuntimeState: (sessionId, state) => updateRuntimeState(sessionId, state),
 		updateSessionBinding: (sessionId, binding) => persistRuntimeSessionBinding(sessionId, binding),
 	});
-
 	let composerRef: ComposerInputRef | undefined;
-	let transcriptScroll:
-		| {
-				scrollTo(position: number): void;
-				scrollHeight: number;
-				isDestroyed?: boolean;
-		  }
-		| undefined;
+	let transcriptScroll: { scrollTo(position: number): void; scrollHeight: number; isDestroyed?: boolean } | undefined;
 	let closed = false;
 	let transcriptScrollTimer: ReturnType<typeof setTimeout> | undefined;
 	const providerAddFlow = createProviderAddFlow({
@@ -94,38 +90,28 @@ export function WEPSCLIShellApp(props: { profileService: ProviderProfileService;
 		},
 		onClose: () => setFocusRegion("composer"),
 	});
-
-	const viewport = createMemo(() => ({
-		width: dimensions().width || 120,
-		height: dimensions().height || 32,
-	}));
-	const showSidebar = createMemo(() => false);
-	const shellReady = createMemo(() => profiles().length > 0);
-	const activeShellMode = createMemo(() => getShellMode(shellMode()));
-
-	const activeProfile = createMemo(() => {
-		const current = selection().profileId;
-		return current ? profiles().find((profile) => profile.id === current) : profiles()[0];
+	const skillAddFlow = createSkillAddFlow({
+		onInstalled: async ({ skill, targetDir, diagnostics }) => {
+			const session = currentSession();
+			const sessionId = session?.id ?? createdTransientSessionId();
+			const warnings = diagnostics.filter((diagnostic) => diagnostic.type === "warning").length;
+			const reloaded = session ? await runtime.reload(session.id, selectionForSession(session), { runtimeSessionFile: session.runtimeSessionFile }) : false;
+			await reloadSkillSlashCommands();
+			pushChatMessage(sessionId, { id: `skill-add:${skill.name}:${Date.now()}`, role: "system", content: reloaded ? `Installed skill ${skill.name} and reloaded the current session.\nPath: ${targetDir}${warnings > 0 ? `\nWarnings: ${warnings}` : ""}` : `Installed skill ${skill.name}.\nPath: ${targetDir}${warnings > 0 ? `\nWarnings: ${warnings}` : ""}`, time: new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }), kind: "status" });
+		},
+		onClose: () => setFocusRegion("composer"),
 	});
-
+	const viewport = createMemo(() => ({ width: dimensions().width || 120, height: dimensions().height || 32 }));
+	const activeShellMode = createMemo(() => getShellMode(shellMode()));
+	const activeProfile = createMemo(() => selection().profileId ? profiles().find((profile) => profile.id === selection().profileId) : profiles()[0]);
 	const activeModel = createMemo(() => selection().modelId ?? activeProfile()?.models[0]?.id);
 	const currentSession = createMemo(() => {
-		const currentId = activeSessionId();
-		const list = sessions();
+		const currentId = activeSessionId(), list = sessions();
 		return currentId ? list.find((item) => item.id === currentId) : list.find((item) => item.state === "active") ?? list[0];
 	});
-	const currentMessages = createMemo(() => {
-		const session = currentSession();
-		return session ? messagesBySession()[session.id] ?? [] : [];
-	});
-	const currentRuntimeState = createMemo(() => {
-		const session = currentSession();
-		return session ? runtimeStateBySession()[session.id] ?? createIdleRuntimeState() : createIdleRuntimeState();
-	});
-	const activeApproval = createMemo(() => approvalRequests()[0]);
-	const recentSessions = createMemo(() => sessions().slice(0, 5));
-	const sessionSummary = createMemo(() => currentSession()?.summary ?? "No session selected yet.");
-
+	const currentMessages = createMemo(() => currentSession() ? messagesBySession()[currentSession()!.id] ?? [] : []);
+	const currentRuntimeState = createMemo(() => currentSession() ? runtimeStateBySession()[currentSession()!.id] ?? createIdleRuntimeState() : createIdleRuntimeState());
+	const activeApproval = createMemo(() => getSessionApprovalRequest(approvalRequests(), currentSession()?.id));
 	const overlayOptions = createMemo<OverlayOption[]>(() => {
 		switch (overlay()) {
 			case "provider":
@@ -168,16 +154,8 @@ export function WEPSCLIShellApp(props: { profileService: ProviderProfileService;
 				return [];
 		}
 	});
-
-	onMount(() => {
-		writeShellDebugLog(`mounted chat shell profiles=${profiles().length} sessions=${sessionHistory.listSessions().length}`);
-		setTimeout(() => composerRef?.focus(), 10);
-	});
-
-	createEffect(() => {
-		runtime.setMode(shellMode());
-	});
-
+	onMount(() => { writeShellDebugLog(`mounted chat shell profiles=${profiles().length} sessions=${sessionHistory.listSessions().length}`); void reloadSkillSlashCommands(); setTimeout(() => composerRef?.focus(), 10); });
+	createEffect(() => { runtime.setMode(shellMode()); });
 	createEffect(() => {
 		const session = currentSession();
 		if (!session) {
@@ -196,147 +174,42 @@ export function WEPSCLIShellApp(props: { profileService: ProviderProfileService;
 		}
 		writeShellDebugLog(`effect session=${session.id} messages=${currentMessages().length}`);
 	});
-
-	useKeyboard((evt) => {
-		writeShellDebugLog(`key name=${evt.name} focus=${focusRegion()} overlay=${overlay() ?? "none"}`);
-
-		if (evt.ctrl && evt.name === "c") {
-			evt.preventDefault();
-			exitShell();
-			return;
-		}
-
-		if (evt.ctrl && evt.name === ".") {
-			evt.preventDefault();
-			void abortActiveRequest();
-			return;
-		}
-
-		if (activeApproval()) {
-			if (evt.name === "escape") {
-				evt.preventDefault();
-				resolveActiveApproval("cancel");
-				return;
-			}
-			if (evt.name === "left" || evt.name === "up") {
-				evt.preventDefault();
-				setApprovalDecisionIndex((current) => wrapIndex(current, -1, 3));
-				return;
-			}
-			if (evt.name === "right" || evt.name === "down") {
-				evt.preventDefault();
-				setApprovalDecisionIndex((current) => wrapIndex(current, 1, 3));
-				return;
-			}
-			if (evt.name === "return") {
-				evt.preventDefault();
-				resolveActiveApproval((["allow", "reject", "cancel"] as ToolApprovalDecision[])[approvalDecisionIndex()] ?? "cancel");
-				return;
-			}
-			return;
-		}
-
-		if (providerAddFlow.isActive()) {
-			if (evt.name === "escape") {
-				evt.preventDefault();
-				providerAddFlow.back();
-				return;
-			}
-
-			if (providerAddFlow.isPickerStep()) {
-				if (evt.name === "up") {
-					evt.preventDefault();
-					providerAddFlow.moveSelection(-1);
-					return;
-				}
-				if (evt.name === "down") {
-					evt.preventDefault();
-					providerAddFlow.moveSelection(1);
-					return;
-				}
-				if (evt.name === "return") {
-					evt.preventDefault();
-					providerAddFlow.confirmSelection();
-					return;
-				}
-			}
-
-			return;
-		}
-
-		if (overlay()) {
-			if (evt.name === "escape") {
-				evt.preventDefault();
-				closeOverlay();
-				return;
-			}
-			if (evt.name === "up") {
-				evt.preventDefault();
-				setOverlayIndex(wrapIndex(overlayIndex(), -1, overlayOptions().length));
-				return;
-			}
-			if (evt.name === "down") {
-				evt.preventDefault();
-				setOverlayIndex(wrapIndex(overlayIndex(), 1, overlayOptions().length));
-				return;
-			}
-			if (evt.name === "return") {
-				evt.preventDefault();
+	useShellKeyboard(
+		{
+			focusRegion,
+			overlay,
+			overlayIndex,
+			overlayOptionsLength: () => overlayOptions().length,
+			hasActiveApproval: () => Boolean(activeApproval()),
+			approvalDecisionIndex,
+			providerAddFlowActive: () => providerAddFlow.isActive(),
+			providerAddFlowPickerStep: () => providerAddFlow.isPickerStep(),
+			skillAddFlowActive: () => skillAddFlow.isActive(),
+			composerValue: () => composerRef?.value ?? composerValue(),
+		},
+		{
+			exitShell,
+			abortActiveRequest,
+			resolveActiveApproval,
+			setApprovalDecisionIndex: (updater) => setApprovalDecisionIndex(updater),
+			providerAddBack: () => providerAddFlow.back(),
+			providerAddMoveSelection: (delta) => providerAddFlow.moveSelection(delta),
+			providerAddConfirmSelection: () => providerAddFlow.confirmSelection(),
+			closeSkillAddFlow: () => skillAddFlow.close(),
+			closeOverlay,
+			setOverlayIndex: (updater) => setOverlayIndex(updater),
+			activateOverlaySelection: () => {
 				const target = overlayOptions()[overlayIndex()];
-				if (target) activateAction(target.id);
-				return;
-			}
-			return;
-		}
-
-		if (evt.option && evt.name === "m") {
-			evt.preventDefault();
-			applyShellMode(nextShellMode(shellMode()));
-			return;
-		}
-
-		if (evt.option && ["1", "2", "3", "4"].includes(evt.name)) {
-			evt.preventDefault();
-			const nextMode = ({
-				"1": "agent",
-				"2": "plan",
-				"3": "read-only",
-				"4": "auto-approve",
-			} as Record<string, ShellModeId>)[evt.name];
-			if (nextMode) {
-				applyShellMode(nextMode);
-			}
-			return;
-		}
-
-		if (evt.name === "tab") {
-			evt.preventDefault();
-			cycleFocus();
-			return;
-		}
-
-		if (focusRegion() === "main") {
-			if (evt.name === "up") {
-				evt.preventDefault();
-				return;
-			}
-			if (evt.name === "down") {
-				evt.preventDefault();
-				return;
-			}
-			if (evt.name === "escape") {
-				evt.preventDefault();
-				setFocusRegion("composer");
-				return;
-			}
-		}
-
-		if (focusRegion() === "composer" && evt.name === "escape" && !(composerRef?.value ?? "").trim()) {
-			evt.preventDefault();
-			exitShell();
-		}
-	});
-
+				if (target) {
+					activateAction(target.id);
+				}
+			},
+			applyNextShellMode: () => applyShellMode(nextShellMode(shellMode())),
+			applyMode: (modeId) => applyShellMode(modeId),
+			cycleFocus,
+			setFocusRegion,
+		},
+	);
 	function exitShell(): void {
 		if (closed) return;
 		closed = true;
@@ -350,11 +223,9 @@ export function WEPSCLIShellApp(props: { profileService: ProviderProfileService;
 		renderer.destroy();
 		props.onExit();
 	}
-
 	function requestRender(): void {
 		(renderer as { requestRender?: () => void }).requestRender?.();
 	}
-
 	function cancelTranscriptAutoScroll(): void {
 		if (!transcriptScrollTimer) {
 			return;
@@ -362,7 +233,6 @@ export function WEPSCLIShellApp(props: { profileService: ProviderProfileService;
 		clearTimeout(transcriptScrollTimer);
 		transcriptScrollTimer = undefined;
 	}
-
 	function scheduleTranscriptScrollToBottom(): void {
 		cancelTranscriptAutoScroll();
 		transcriptScrollTimer = setTimeout(() => {
@@ -373,12 +243,14 @@ export function WEPSCLIShellApp(props: { profileService: ProviderProfileService;
 			transcriptScroll.scrollTo(transcriptScroll.scrollHeight);
 		}, 50);
 	}
-
 	function reloadProviderState(): void {
 		setProfiles(props.profileService.listProfiles());
 		setSelection(props.profileService.getActiveSelection());
 	}
-
+	async function reloadSkillSlashCommands(): Promise<void> {
+		const result = await listInstalledSkills();
+		setSkillSlashCommands(buildSkillSlashCommands(result.skills));
+	}
 	function updateRuntimeState(sessionId: string, state: RuntimeSessionState): void {
 		setRuntimeStateBySession((current) => ({
 			...current,
@@ -386,7 +258,6 @@ export function WEPSCLIShellApp(props: { profileService: ProviderProfileService;
 		}));
 		requestRender();
 	}
-
 	async function abortActiveRequest(): Promise<void> {
 		const session = currentSession();
 		if (!session) {
@@ -403,7 +274,6 @@ export function WEPSCLIShellApp(props: { profileService: ProviderProfileService;
 			});
 		}
 	}
-
 	async function compactCurrentSession(): Promise<void> {
 		const session = currentSession();
 		if (!session) {
@@ -417,12 +287,10 @@ export function WEPSCLIShellApp(props: { profileService: ProviderProfileService;
 			});
 			return;
 		}
-
 		await runtime.compact(session.id, selectionForSession(session), {
 			runtimeSessionFile: session.runtimeSessionFile,
 		});
 	}
-
 	function applyShellMode(nextMode: ShellModeId): void {
 		if (shellMode() === nextMode) {
 			const sessionId = currentSession()?.id ?? createdTransientSessionId();
@@ -435,7 +303,6 @@ export function WEPSCLIShellApp(props: { profileService: ProviderProfileService;
 			});
 			return;
 		}
-
 		setShellMode(nextMode);
 		const sessionId = currentSession()?.id ?? createdTransientSessionId();
 		pushChatMessage(sessionId, {
@@ -449,16 +316,16 @@ export function WEPSCLIShellApp(props: { profileService: ProviderProfileService;
 		setFocusRegion("composer");
 		requestRender();
 	}
-
 	function openApprovalRequest(request: ToolApprovalRequest): void {
 		writeShellDebugLog(`approval open tool=${request.toolName} id=${request.id}`);
-		setOverlay(undefined);
 		setApprovalRequests((current) => [...current, request]);
-		setApprovalDecisionIndex(0);
-		setFocusRegion("overlay");
+		if (currentSession()?.id === request.sessionId) {
+			setOverlay(undefined);
+			setApprovalDecisionIndex(0);
+			setFocusRegion("overlay");
+		}
 		requestRender();
 	}
-
 	function closeApprovalRequest(requestId: string): void {
 		writeShellDebugLog(`approval close id=${requestId}`);
 		setApprovalRequests((current) => current.filter((request) => request.id !== requestId));
@@ -468,7 +335,6 @@ export function WEPSCLIShellApp(props: { profileService: ProviderProfileService;
 		}
 		requestRender();
 	}
-
 	function resolveActiveApproval(decision: ToolApprovalDecision): void {
 		const request = activeApproval();
 		if (!request) {
@@ -477,7 +343,6 @@ export function WEPSCLIShellApp(props: { profileService: ProviderProfileService;
 		writeShellDebugLog(`approval decision tool=${request.toolName} decision=${decision}`);
 		runtime.resolveApproval(request.id, decision);
 	}
-
 	function setFocusRegion(region: ShellFocus): void {
 		setFocusRegionState(region);
 		if (region === "composer") {
@@ -486,7 +351,6 @@ export function WEPSCLIShellApp(props: { profileService: ProviderProfileService;
 		}
 		composerRef?.blur();
 	}
-
 	function cycleFocus(): void {
 		if (activeApproval() || overlay()) {
 			setFocusRegion("overlay");
@@ -496,14 +360,6 @@ export function WEPSCLIShellApp(props: { profileService: ProviderProfileService;
 		const index = order.indexOf(focusRegion());
 		setFocusRegion(order[(index + 1) % order.length] ?? "composer");
 	}
-
-	function setShellView(next: ShellView): void {
-		batch(() => {
-			setView(next);
-		});
-		setFocusRegion("composer");
-	}
-
 	function openOverlay(kind: OverlayKind): void {
 		if (kind === "model" && profiles().length === 0) {
 			return;
@@ -530,13 +386,20 @@ export function WEPSCLIShellApp(props: { profileService: ProviderProfileService;
 		setOverlay(undefined);
 		setFocusRegion("composer");
 	}
-
 	function openProviderAdd(): void {
 		setOverlay(undefined);
+		skillAddFlow.close();
 		providerAddFlow.open();
 		setFocusRegion("overlay");
 	}
-
+	function openSkillAdd(): void {
+		setOverlay(undefined);
+		if (providerAddFlow.isActive()) {
+			providerAddFlow.close();
+		}
+		skillAddFlow.open();
+		setFocusRegion("overlay");
+	}
 	function ensureSessionTranscript(sessionId: string): void {
 		setMessagesBySession((current) => {
 			if (current[sessionId]) return current;
@@ -555,13 +418,11 @@ export function WEPSCLIShellApp(props: { profileService: ProviderProfileService;
 		requestRender();
 		scheduleTranscriptScrollToBottom();
 	}
-
 	function appendTranscriptMessage(sessionId: string, message: ChatMessage): void {
 		setMessagesBySession((current) => appendSessionMessage(current, sessionId, message));
 		requestRender();
 		scheduleTranscriptScrollToBottom();
 	}
-
 	function replaceTranscriptMessages(sessionId: string, messages: ChatMessage[]): void {
 		setMessagesBySession((current) => ({
 			...current,
@@ -570,13 +431,11 @@ export function WEPSCLIShellApp(props: { profileService: ProviderProfileService;
 		requestRender();
 		scheduleTranscriptScrollToBottom();
 	}
-
 	function insertTranscriptMessageBefore(sessionId: string, beforeMessageId: string, message: ChatMessage): void {
 		setMessagesBySession((current) => insertSessionMessageBefore(current, sessionId, beforeMessageId, message));
 		requestRender();
 		scheduleTranscriptScrollToBottom();
 	}
-
 	function patchTranscriptMessage(sessionId: string, messageId: string, patch: TranscriptMessagePatch): void {
 		setMessagesBySession((current) => {
 			const next = patchSessionMessage(current, sessionId, messageId, patch);
@@ -585,20 +444,17 @@ export function WEPSCLIShellApp(props: { profileService: ProviderProfileService;
 		requestRender();
 		scheduleTranscriptScrollToBottom();
 	}
-
 	function toggleTranscriptMessage(sessionId: string, messageId: string): void {
 		cancelTranscriptAutoScroll();
 		setMessagesBySession((current) => toggleSessionMessageState(current, sessionId, messageId));
 		requestRender();
 	}
-
 	function selectionForSession(session = currentSession()): RuntimeSelection {
 		return {
 			profileId: session?.providerProfileId ?? selection().profileId,
 			modelId: session?.modelId ?? selection().modelId,
 		};
 	}
-
 	function persistRuntimeSessionBinding(sessionId: string, binding: { runtimeSessionFile?: string }): void {
 		if (!binding.runtimeSessionFile) {
 			return;
@@ -627,6 +483,16 @@ export function WEPSCLIShellApp(props: { profileService: ProviderProfileService;
 	}
 
 	function activateSession(sessionId: string): void {
+		cancelTranscriptAutoScroll();
+		if (providerAddFlow.isActive()) {
+			providerAddFlow.close();
+		}
+		if (skillAddFlow.isActive()) {
+			skillAddFlow.close();
+		}
+		setOverlay(undefined);
+		setOverlayIndex(0);
+		setApprovalDecisionIndex(0);
 		setActiveSessionId(sessionId);
 		ensureSessionTranscript(sessionId);
 		syncActiveSelectionFromSession(sessionId);
@@ -634,7 +500,6 @@ export function WEPSCLIShellApp(props: { profileService: ProviderProfileService;
 		if (session) {
 			sessionHistory.markActive(sessionId);
 			setSessions(sessionHistory.listSessions());
-			setShellView("home");
 			void runtime.syncSelection(sessionId, selectionForSession(session));
 			if (session.runtimeSessionFile) {
 				void runtime.loadSession(sessionId, selectionForSession(session), {
@@ -642,7 +507,8 @@ export function WEPSCLIShellApp(props: { profileService: ProviderProfileService;
 				});
 			}
 		}
-		closeOverlay();
+		setFocusRegion(nextFocusRegionForSession(sessionId, approvalRequests()));
+		scheduleTranscriptScrollToBottom();
 	}
 
 	function startNewSession() {
@@ -687,93 +553,72 @@ export function WEPSCLIShellApp(props: { profileService: ProviderProfileService;
 		requestRender();
 	}
 
-	function handleComposerSubmit(value: string): void {
-		const trimmed = value.trim();
-		writeShellDebugLog(`handleComposerSubmit raw=${JSON.stringify(value)} trimmed=${JSON.stringify(trimmed)}`);
-		if (!trimmed) return;
-
-		const session = currentSession() ?? startNewSession();
-		writeShellDebugLog(`handleComposerSubmit currentSession=${session?.id ?? "none"}`);
-		if (!session) {
-			writeShellDebugLog("handleComposerSubmit no current session available");
-			return;
-		}
-
-		if (trimmed.startsWith("/")) {
-			writeShellDebugLog(`handleComposerSubmit slash=${trimmed}`);
-			runSlashCommand(trimmed);
-			return;
-		}
-
-		ensureSessionTranscript(session.id);
+	function updatePromptSession(session: NonNullable<ReturnType<typeof currentSession>>, trimmed: string, sessionSelection: RuntimeSelection): void {
 		sessionHistory.updateSession(session.id, {
 			title: `Chat: ${truncate(trimmed, 24)}`,
 			summary: `Last prompt: ${truncate(trimmed, 60)}`,
-			providerProfileId: selectionForSession(session).profileId,
+			providerProfileId: sessionSelection.profileId,
 			providerLabel: activeProfile()?.label,
-			modelId: selectionForSession(session).modelId,
+			modelId: sessionSelection.modelId,
 			lastPrompt: trimmed,
 			state: "active",
 		});
 		setSessions(sessionHistory.listSessions());
-		writeShellDebugLog(`handleComposerSubmit sessionUpdated=${session.id}`);
-		setComposerValue("");
-		composerRef?.setText?.("");
-		composerRef?.focus();
-		void runtime.prompt(session.id, applyShellModePrompt(shellMode(), trimmed), selectionForSession(session), {
-			runtimeSessionFile: session.runtimeSessionFile,
-		});
-		requestRender();
 	}
 
-	function runSlashCommand(commandId: string): void {
-		executeSlashCommand(commandId, {
-			startNewSession,
-			openOverlay,
-			openProviderAdd,
-			compactCurrentSession,
-			abortActiveRequest: () => {
-				void abortActiveRequest();
-			},
-			setMode: (modeId) => applyShellMode(modeId),
-			getCurrentMode: () => shellMode(),
-			getStatusSummary: () => {
-				const session = currentSession();
-				const runtimeState = currentRuntimeState();
-				return [
-					"Current shell status:",
-					`Session: ${session?.title ?? "none"}`,
-					`Mode: ${activeShellMode().label}`,
-					`Provider: ${activeProfile()?.label ?? "none"}`,
-					`Model: ${activeModel() ?? "none"}`,
-					`Runtime: ${runtimeState.label}`,
-					`Agent dir: ${getAgentDir()}`,
-				].join("\n");
-			},
-			queuePromptTemplate: (title: string, prompt: string, summary: string) => {
-				const session = currentSession() ?? startNewSession();
-				pushChatMessage(session.id, {
-					id: `${session.id}:system:${Date.now()}`,
-					role: "system",
-					content: `${title}: ${summary}`,
-					time: new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }),
-				});
-				setComposerValue(prompt);
-				composerRef?.setText?.(prompt);
-				composerRef?.focus();
-				setFocusRegion("composer");
-			},
-			pushTimeline: (message: string) => {
-				const session = currentSession() ?? startNewSession();
-				pushChatMessage(session.id, {
-					id: `${session.id}:system:${Date.now()}`,
-					role: "system",
-					content: message,
-					time: new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }),
-				});
-			},
+	async function reloadCurrentSessionResources(): Promise<void> {
+		const session = currentSession();
+		if (!session) {
+			promptController.pushSystemMessage(createdTransientSessionId(), "No active session is ready to reload yet.");
+			return;
+		}
+		const reloaded = await runtime.reload(session.id, selectionForSession(session), {
+			runtimeSessionFile: session.runtimeSessionFile,
 		});
+		await reloadSkillSlashCommands();
+		promptController.pushSystemMessage(
+			session.id,
+			reloaded
+				? "Reloaded skills, prompts, and extensions for the current session."
+				: "Resource reload did not complete successfully.",
+		);
 	}
+
+	const promptController = createShellPromptController({
+		currentSession,
+		startNewSession,
+		createdTransientSessionId,
+		selectionForSession,
+		ensureSessionTranscript,
+		updatePromptSession,
+		pushChatMessage,
+		setComposerValue,
+		setComposerText: (value) => composerRef?.setText?.(value),
+		focusComposer: () => composerRef?.focus(),
+		setFocusRegionComposer: () => setFocusRegion("composer"),
+		requestRender,
+		runtimePrompt: (sessionId, text, sessionSelection, runtimeSessionFile) => {
+			void runtime.prompt(sessionId, text, sessionSelection, { runtimeSessionFile });
+		},
+		reloadCurrentSessionResources,
+		openSkillAdd,
+		openOverlay,
+		openProviderAdd,
+		compactCurrentSession,
+		abortActiveRequest: () => {
+			void abortActiveRequest();
+		},
+		applyShellMode,
+		getCurrentMode: () => shellMode(),
+		getStatusSummary: () => {
+			const session = currentSession();
+			return ["Current shell status:", `Session: ${session?.title ?? "none"}`, `Mode: ${activeShellMode().label}`, `Provider: ${activeProfile()?.label ?? "none"}`, `Model: ${activeModel() ?? "none"}`, `Runtime: ${currentRuntimeState().label}`, `Agent dir: ${getAgentDir()}`].join("\n");
+		},
+		showSkillsSummary: async () => {
+			promptController.pushSystemMessage(currentSession()?.id ?? createdTransientSessionId(), await formatInstalledSkillsSummary());
+		},
+		getAdditionalSlashCommands: skillSlashCommands,
+	});
 
 	function activateAction(actionId: string): void {
 		if (actionId === "session:new") {
@@ -885,33 +730,7 @@ export function WEPSCLIShellApp(props: { profileService: ProviderProfileService;
 		return created.id;
 	}
 
-	const topStatus = createMemo(() => {
-		const profile = activeProfile();
-		const runtimeState = currentRuntimeState();
-		if (!profile) return runtimeState.label;
-		return `${profile.label} · ${activeModel() ?? "no model"} · ${runtimeState.label}`;
-	});
-
-	const sidebarSummary = createMemo(() => {
-		if (!shellReady()) return "Complete onboarding to connect a provider.";
-		return activeProfile()?.baseUrl ?? "Provider ready.";
-	});
-
-	function runtimeStatusColor(state: RuntimeSessionState): string {
-		switch (runtimeStateTone(state)) {
-			case "accent":
-				return theme.accent;
-			case "warning":
-				return theme.warning;
-			case "danger":
-				return theme.danger;
-			case "success":
-				return theme.success;
-			case "muted":
-				return theme.muted;
-		}
-	}
-
+	const topStatus = createMemo(() => `${activeProfile()?.label ?? "none"} · ${activeModel() ?? "no model"} · ${currentRuntimeState().label}`);
 	return (
 		<box flexGrow={1} flexDirection="column" backgroundColor={theme.background}>
 			<box flexShrink={0} backgroundColor={theme.header} paddingLeft={1} paddingRight={1} paddingTop={1} paddingBottom={1} flexDirection="row" justifyContent="space-between" gap={1}>
@@ -955,8 +774,9 @@ export function WEPSCLIShellApp(props: { profileService: ProviderProfileService;
 				onFocus={() => setFocusRegion("composer")}
 				onInput={(value) => setComposerValue(value)}
 				onModeClick={() => applyShellMode(nextShellMode(shellMode()))}
-				onSubmit={handleComposerSubmit}
-				onSelectSlashCommand={runSlashCommand}
+				onSubmit={promptController.handleComposerSubmit}
+				onSelectSlashCommand={promptController.runSlashCommand}
+				slashCommands={skillSlashCommands()}
 			/>
 
 			{overlay() ? (
@@ -983,6 +803,7 @@ export function WEPSCLIShellApp(props: { profileService: ProviderProfileService;
 			) : null}
 
 			{providerAddFlow.render()}
+			{skillAddFlow.render()}
 
 			<box flexShrink={0} paddingLeft={1} paddingRight={1} paddingBottom={0} paddingTop={0} flexDirection="row">
 				<text fg={theme.muted}>{truncate(getAgentDir(), 36)}</text>

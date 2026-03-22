@@ -16,14 +16,19 @@ let selectedMode = "";
 let timelineMessage = "";
 executeSlashCommand("/mode plan", {
 	startNewSession: () => {},
+	retryLastPrompt: () => {},
+	openSkillAdd: () => {},
 	openOverlay: () => {},
 	openProviderAdd: () => {},
 	compactCurrentSession: () => {},
+	reloadCurrentSessionResources: () => {},
 	abortActiveRequest: () => {},
 	setMode: (modeId) => {
 		selectedMode = modeId;
 	},
 	getCurrentMode: () => "agent",
+	showSkillsSummary: () => {},
+	getStatusSummary: () => "",
 	queuePromptTemplate: () => {},
 	pushTimeline: (message) => {
 		timelineMessage = message;
@@ -33,12 +38,17 @@ assert.equal(selectedMode, "plan");
 
 executeSlashCommand("/mode", {
 	startNewSession: () => {},
+	retryLastPrompt: () => {},
+	openSkillAdd: () => {},
 	openOverlay: () => {},
 	openProviderAdd: () => {},
 	compactCurrentSession: () => {},
+	reloadCurrentSessionResources: () => {},
 	abortActiveRequest: () => {},
 	setMode: () => {},
 	getCurrentMode: () => "read-only",
+	showSkillsSummary: () => {},
+	getStatusSummary: () => "",
 	queuePromptTemplate: () => {},
 	pushTimeline: (message) => {
 		timelineMessage = message;

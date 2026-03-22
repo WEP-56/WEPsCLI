@@ -1,0 +1,125 @@
+- generic [ref=e2]:
+  - generic [ref=e49]:
+    - generic [ref=e50]: 已连接
+    - button "关闭" [ref=e51] [cursor=pointer]:
+      - img [ref=e52]
+  - generic [ref=e55]:
+    - banner [ref=e56]:
+      - generic [ref=e57]:
+        - button "收起" [ref=e58] [cursor=pointer]:
+          - img [ref=e59]
+        - img "CPAMC logo" [ref=e61]
+        - generic [ref=e62] [cursor=pointer]:
+          - generic [ref=e63]: CLI Proxy API Management Center
+          - generic: CPAMC
+      - generic [ref=e64]:
+        - generic [ref=e65]:
+          - generic [ref=e66]: 已连接
+          - generic [ref=e67]: http://localhost:8317
+        - generic [ref=e68]:
+          - button "刷新全部" [ref=e69] [cursor=pointer]:
+            - img [ref=e71]
+          - button "语言" [ref=e75] [cursor=pointer]:
+            - img [ref=e77]
+          - button "主题" [ref=e81] [cursor=pointer]:
+            - img [ref=e83]
+          - button "登出" [ref=e90] [cursor=pointer]:
+            - img [ref=e92]
+    - generic [ref=e95]:
+      - complementary [ref=e96]:
+        - generic [ref=e97]:
+          - link "仪表盘" [ref=e98] [cursor=pointer]:
+            - /url: "#/"
+            - img [ref=e100]
+            - generic [ref=e105]: 仪表盘
+          - link "配置面板" [ref=e106] [cursor=pointer]:
+            - /url: "#/config"
+            - img [ref=e108]
+            - generic [ref=e111]: 配置面板
+          - link "AI 提供商" [ref=e112] [cursor=pointer]:
+            - /url: "#/ai-providers"
+            - img [ref=e114]
+            - generic [ref=e120]: AI 提供商
+          - link "认证文件" [ref=e121] [cursor=pointer]:
+            - /url: "#/auth-files"
+            - img [ref=e123]
+            - generic [ref=e127]: 认证文件
+          - link "OAuth 登录" [ref=e128] [cursor=pointer]:
+            - /url: "#/oauth"
+            - img [ref=e130]
+            - generic [ref=e133]: OAuth 登录
+          - link "配额管理" [ref=e134] [cursor=pointer]:
+            - /url: "#/quota"
+            - img [ref=e136]
+            - generic [ref=e139]: 配额管理
+          - link "使用统计" [ref=e140] [cursor=pointer]:
+            - /url: "#/usage"
+            - img [ref=e142]
+            - generic [ref=e146]: 使用统计
+          - link "中心信息" [ref=e147] [cursor=pointer]:
+            - /url: "#/system"
+            - img [ref=e149]
+            - generic [ref=e152]: 中心信息
+      - main [ref=e154]:
+        - generic [ref=e157]:
+          - generic [ref=e158]:
+            - heading "仪表盘" [level=1] [ref=e159]
+            - paragraph [ref=e160]: 欢迎使用 CLI Proxy API 管理中心
+          - generic [ref=e161]:
+            - generic [ref=e164]: 已连接
+            - generic [ref=e165]:
+              - generic [ref=e166]: http://localhost:8317
+              - generic [ref=e167]: v6.8.53
+              - generic [ref=e168]: 2026/3/15
+          - generic [ref=e169]:
+            - link "5 管理密钥 配置面板" [ref=e170] [cursor=pointer]:
+              - /url: "#/config"
+              - img [ref=e172]
+              - generic [ref=e176]:
+                - generic [ref=e177]: "5"
+                - generic [ref=e178]: 管理密钥
+                - generic [ref=e179]: 配置面板
+            - link "0 AI 提供商 G:0 C:0 Cl:0 O:0" [ref=e180] [cursor=pointer]:
+              - /url: "#/ai-providers"
+              - img [ref=e182]
+              - generic [ref=e185]:
+                - generic [ref=e186]: "0"
+                - generic [ref=e187]: AI 提供商
+                - generic [ref=e188]: G:0 C:0 Cl:0 O:0
+            - link "583 认证文件 OAuth 凭证" [ref=e189] [cursor=pointer]:
+              - /url: "#/auth-files"
+              - img [ref=e191]
+              - generic [ref=e194]:
+                - generic [ref=e195]: "583"
+                - generic [ref=e196]: 认证文件
+                - generic [ref=e197]: OAuth 凭证
+            - link "16 可用模型 所有提供商的模型总数" [ref=e198] [cursor=pointer]:
+              - /url: "#/system"
+              - img [ref=e200]
+              - generic [ref=e206]:
+                - generic [ref=e207]: "16"
+                - generic [ref=e208]: 可用模型
+                - generic [ref=e209]: 所有提供商的模型总数
+          - generic [ref=e210]:
+            - heading "当前配置" [level=2] [ref=e211]
+            - generic [ref=e212]:
+              - generic [ref=e213]:
+                - generic [ref=e214]: 启用调试模式
+                - generic [ref=e215]: 否
+              - generic [ref=e216]:
+                - generic [ref=e217]: 启用使用统计
+                - generic [ref=e218]: 是
+              - generic [ref=e219]:
+                - generic [ref=e220]: 启用日志记录到文件
+                - generic [ref=e221]: 否
+              - generic [ref=e222]:
+                - generic [ref=e223]: "重试次数:"
+                - generic [ref=e224]: "3"
+              - generic [ref=e225]:
+                - generic [ref=e226]: 启用 /ws/* 鉴权
+                - generic [ref=e227]: 否
+              - generic [ref=e228]:
+                - generic [ref=e229]: 路由策略
+                - generic [ref=e230]: round-robin (轮询)
+            - link "编辑设置 →" [ref=e231] [cursor=pointer]:
+              - /url: "#/config"

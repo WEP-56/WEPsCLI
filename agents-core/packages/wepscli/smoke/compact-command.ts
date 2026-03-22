@@ -86,13 +86,20 @@ assert.ok(getSlashCommands("/comp").some((command) => command.id === "/compact")
 
 executeSlashCommand("/compact", {
 	startNewSession: () => {},
+	retryLastPrompt: () => {},
+	openSkillAdd: () => {},
 	openOverlay: () => {},
 	openProviderAdd: () => {},
 	compactCurrentSession: () => {
 		compactHandlerCalls += 1;
 	},
+	reloadCurrentSessionResources: () => {},
 	abortActiveRequest: () => {},
 	queuePromptTemplate: () => {},
+	showSkillsSummary: () => {},
+	getStatusSummary: () => "",
+	getCurrentMode: () => "agent",
+	setMode: () => {},
 	pushTimeline: () => {},
 });
 

@@ -153,7 +153,7 @@
 - [x] `/sessions`
 - [x] `/compact`
 - [x] `/help` `/status` `/clear` `/resume`
-- [ ] 其他高频命令
+- [x] 其他高频命令（已补 `/retry`、`/provider`、`/model`、`/session`）
 
 
 ### P6 右侧状态 / 上下文面板（不做或最低优先级）
@@ -195,7 +195,20 @@
 
 状态: 待做
 
-- [ ] skills
+- [x] skills
+  - [x] P10.1 skill 安装与存储
+  - [x] 在 `wepscli` 的 agent dir 下建立并使用 `skills/` 目录（即 `~/.wepscli/agent/skills`）
+  - [x] 支持从用户输入路径导入 skill（skill 根目录或 `SKILL.md` 所在目录）
+  - [x] 复制整个 skill 目录到 `wepscli` skills 目录，保留脚本与资源文件
+  - [x] 导入前复用 `coding-agent` 的 skill 校验/加载规则做校验
+  - [x] skill 名称冲突时先拒绝覆盖并给出明确提示
+  - [x] P10.2 skill 调用与 reload
+  - [x] `wepscli` 本地 slash command 不再拦截 `/skill:name`，改为透传给 runtime session
+  - [x] skill 导入后支持对当前 session 执行 reload，使新 skill 立即可用
+  - [x] P10.3 skills 可见性与管理
+  - [x] `/skills` 展示当前已安装 skills 与 diagnostics
+  - [x] `/skill add` 进入导入流程
+  - [x] `/skills reload` 触发当前 session 资源重载
 - [ ] MCP
 - [ ] 图片
 - [ ] 拖拽

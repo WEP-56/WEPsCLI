@@ -211,10 +211,11 @@ The composer supports a small slash‑command palette. Type `/` to see suggestio
 Built‑in commands:
 
 - `/new` – start a new shell session.
-- `/providers` – open the provider picker overlay.
+- `/retry` – resend the last prompt in the current session.
+- `/provider` or `/providers` – open the provider picker overlay.
 - `/provider add` – open the guided provider setup flow inside the shell.
-- `/models` – open the model picker for the active provider.
-- `/sessions` – choose from recent sessions.
+- `/model` or `/models` – open the model picker for the active provider.
+- `/session`, `/sessions`, or `/resume` – choose from recent sessions.
 - `/review` – queue a "review current change" prompt template into the composer.
 - `/debug` – queue a "debug current issue" prompt template.
 - `/provider-check` – queue a provider configuration inspection task.

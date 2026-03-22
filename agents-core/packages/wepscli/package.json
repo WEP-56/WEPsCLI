@@ -27,7 +27,11 @@
 		"smoke:interrupt-status": "bun ./smoke/interrupt-status.ts",
 		"smoke:mode-layer": "bun ./smoke/mode-layer.ts",
 		"smoke:runtime-recovery": "bun ./smoke/runtime-recovery.ts",
+		"smoke:skill-command-routing": "bun ./smoke/skill-command-routing.ts",
+		"smoke:skill-message-summary": "bun ./smoke/skill-message-summary.ts",
+		"smoke:session-consistency": "bun ./smoke/session-consistency.ts",
 		"smoke:slash-common": "bun ./smoke/slash-common.ts",
+		"smoke:skills-install": "bun ./smoke/skills-install.ts",
 		"smoke:tool-file-changes": "bun ./smoke/tool-file-changes.ts",
 		"smoke:tool-events": "bun ./smoke/tool-events.ts",
 		"prepublishOnly": "npm run clean && npm run build"

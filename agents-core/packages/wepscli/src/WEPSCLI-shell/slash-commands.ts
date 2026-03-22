@@ -4,9 +4,16 @@ import { buildShellModeSlashCommands, findShellModeByCommand, shellModeHelpMessa
 const ALL_SLASH_COMMANDS: SlashCommandItem[] = [
 	{ id: "/new", label: "/new", description: "Stage a new shell session", keyHint: "n" },
 	{ id: "/clear", label: "/clear", description: "Start a fresh session immediately", keyHint: "l" },
+	{ id: "/retry", label: "/retry", description: "Resend the last prompt in the current session", keyHint: "y" },
+	{ id: "/skills", label: "/skills", description: "List installed skills and validation diagnostics" },
+	{ id: "/skills reload", label: "/skills reload", description: "Reload skills, prompts, and extensions for the current session" },
+	{ id: "/skill add", label: "/skill add", description: "Install a skill into WEPSCLI from a local path" },
+	{ id: "/provider", label: "/provider", description: "Open the provider picker" },
 	{ id: "/providers", label: "/providers", description: "Open the provider picker", keyHint: "p" },
 	{ id: "/provider add", label: "/provider add", description: "Open the guided provider setup flow", keyHint: "a" },
+	{ id: "/model", label: "/model", description: "Open the model picker" },
 	{ id: "/models", label: "/models", description: "Open the model picker", keyHint: "m" },
+	{ id: "/session", label: "/session", description: "Open the session picker" },
 	{ id: "/sessions", label: "/sessions", description: "Open the session picker", keyHint: "s" },
 	{ id: "/resume", label: "/resume", description: "Open the session picker to resume another chat", keyHint: "r" },
 	{ id: "/compact", label: "/compact", description: "Manually compact the current session context", keyHint: "c" },
@@ -21,53 +28,92 @@ const ALL_SLASH_COMMANDS: SlashCommandItem[] = [
 
 interface SlashHandlers {
 	startNewSession: () => void;
+	retryLastPrompt: () => void;
+	openSkillAdd: () => void;
 	openOverlay: (kind: "provider" | "model" | "session") => void;
 	openProviderAdd: () => void;
 	compactCurrentSession: () => Promise<void> | void;
+	reloadCurrentSessionResources: () => Promise<void> | void;
 	abortActiveRequest: () => void;
 	setMode: (modeId: ShellModeId) => void;
 	getCurrentMode: () => ShellModeId;
 	getStatusSummary: () => string;
+	showSkillsSummary: () => Promise<void> | void;
 	queuePromptTemplate: (title: string, prompt: string, summary: string) => void;
 	pushTimeline: (message: string) => void;
 }
 
-function helpSummary(): string {
+function mergeSlashCommands(additionalCommands: SlashCommandItem[] = []): SlashCommandItem[] {
+	const merged = [...ALL_SLASH_COMMANDS];
+	for (const command of additionalCommands) {
+		if (!merged.some((item) => item.id === command.id)) {
+			merged.push(command);
+		}
+	}
+	return merged;
+}
+
+function helpSummary(additionalCommands: SlashCommandItem[] = []): string {
+	const commands = mergeSlashCommands(additionalCommands);
 	const lines = [
 		"Available slash commands:",
-		...ALL_SLASH_COMMANDS.map((command) => `${command.id} - ${command.description}`),
+		...commands.map((command) => `${command.id} - ${command.description}`),
 		"",
 		"Type / to browse the full command list from the composer.",
 	];
 	return lines.join("\n");
 }
 
-export function getSlashCommands(query: string): SlashCommandItem[] {
+export function getSlashCommands(query: string, additionalCommands: SlashCommandItem[] = []): SlashCommandItem[] {
+	const commands = mergeSlashCommands(additionalCommands);
 	const trimmed = query.trim().toLowerCase();
 	if (!trimmed.startsWith("/")) {
 		return [];
 	}
 	if (trimmed === "/") {
-		return ALL_SLASH_COMMANDS;
+		return commands;
 	}
-	return ALL_SLASH_COMMANDS.filter((command) => command.id.startsWith(trimmed));
+	return commands.filter((command) => command.id.startsWith(trimmed));
 }
 
-export function executeSlashCommand(commandId: string, handlers: SlashHandlers): void {
+export function shouldHandleSlashCommandLocally(commandId: string): boolean {
+	return !commandId.startsWith("/skill:");
+}
+
+export function shouldInsertSlashCommand(commandId: string): boolean {
+	return commandId.startsWith("/skill:");
+}
+
+export function executeSlashCommand(commandId: string, handlers: SlashHandlers, additionalCommands: SlashCommandItem[] = []): void {
 	switch (commandId) {
 		case "/new":
 		case "/clear":
 			handlers.startNewSession();
 			return;
+		case "/retry":
+			handlers.retryLastPrompt();
+			return;
+		case "/skills":
+			void handlers.showSkillsSummary();
+			return;
+		case "/skills reload":
+			void handlers.reloadCurrentSessionResources();
+			return;
+		case "/skill add":
+			handlers.openSkillAdd();
+			return;
+		case "/provider":
 		case "/providers":
 			handlers.openOverlay("provider");
 			return;
 		case "/provider add":
 			handlers.openProviderAdd();
 			return;
+		case "/model":
 		case "/models":
 			handlers.openOverlay("model");
 			return;
+		case "/session":
 		case "/sessions":
 		case "/resume":
 			handlers.openOverlay("session");
@@ -85,7 +131,7 @@ export function executeSlashCommand(commandId: string, handlers: SlashHandlers):
 			handlers.pushTimeline(handlers.getStatusSummary());
 			return;
 		case "/help":
-			handlers.pushTimeline(helpSummary());
+			handlers.pushTimeline(helpSummary(additionalCommands));
 			return;
 		case "/review":
 			handlers.queuePromptTemplate(

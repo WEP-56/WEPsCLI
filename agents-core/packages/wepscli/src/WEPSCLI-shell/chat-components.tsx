@@ -1,10 +1,10 @@
 import { useKeyboard } from "@opentui/solid";
 import { For, Show, createEffect, createMemo, createSignal } from "solid-js";
-import { getSlashCommands } from "./slash-commands.js";
+import { getSlashCommands, shouldInsertSlashCommand } from "./slash-commands.js";
 import type { ShellModeTone } from "./shell-modes.js";
 import { wepscliShellTheme as theme } from "./theme.js";
 import type { ToolMessageState } from "./tool-messages.js";
-import type { OverlayOption } from "./types.js";
+import type { OverlayOption, SlashCommandItem } from "./types.js";
 
 export type ComposerInputRef = {
 	value?: string;
@@ -95,11 +95,12 @@ export function ChatComposer(props: {
 	onModeClick: () => void;
 	onSubmit: (value: string) => void;
 	onSelectSlashCommand: (id: string) => void;
+	slashCommands?: SlashCommandItem[];
 }) {
 	let inputRef: ComposerInputRef | undefined;
 	const [draftValue, setDraftValue] = createSignal(props.value);
 	const [slashIndex, setSlashIndex] = createSignal(0);
-	const slashOptions = createMemo(() => getSlashCommands(draftValue()));
+	const slashOptions = createMemo(() => getSlashCommands(draftValue(), props.slashCommands ?? []));
 	const visibleSlashOptions = createMemo(() => slashOptions().slice(0, 6));
 
 	createEffect(() => {
@@ -131,7 +132,7 @@ export function ChatComposer(props: {
 				return;
 			}
 			evt.preventDefault();
-			props.onSelectSlashCommand(command.id);
+			selectSlashCommand(command.id);
 		}
 	});
 
@@ -141,12 +142,20 @@ export function ChatComposer(props: {
 		props.onInput(nextValue);
 	}
 
+	function selectSlashCommand(commandId: string) {
+		if (shouldInsertSlashCommand(commandId)) {
+			updateValue(`${commandId} `);
+			return;
+		}
+		props.onSelectSlashCommand(commandId);
+	}
+
 	function submitCurrentValue(value: string) {
-		const matchingCommands = getSlashCommands(value).slice(0, 6);
+		const matchingCommands = getSlashCommands(value, props.slashCommands ?? []).slice(0, 6);
 		if (value.trim().startsWith("/") && matchingCommands.length > 0) {
 			const command = matchingCommands[slashIndex()] ?? matchingCommands[0];
 			if (command) {
-				props.onSelectSlashCommand(command.id);
+				selectSlashCommand(command.id);
 				return;
 			}
 		}
@@ -159,7 +168,7 @@ export function ChatComposer(props: {
 				<box backgroundColor={theme.panel} border={["bottom"]} borderColor={theme.border} paddingLeft={1} paddingRight={1} paddingTop={0} paddingBottom={0} flexDirection="column" gap={0}>
 					<For each={visibleSlashOptions()}>
 						{(option, index) => (
-							<box backgroundColor={slashIndex() === index() ? theme.accent : theme.panelAlt} paddingLeft={1} paddingRight={1} flexDirection="row" onMouseUp={() => props.onSelectSlashCommand(option.id)}>
+							<box backgroundColor={slashIndex() === index() ? theme.accent : theme.panelAlt} paddingLeft={1} paddingRight={1} flexDirection="row" onMouseUp={() => selectSlashCommand(option.id)}>
 								<text fg={slashIndex() === index() ? theme.background : theme.text}>{truncateText(option.label, 24)}</text>
 							</box>
 						)}

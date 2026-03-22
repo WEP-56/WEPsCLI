@@ -37,6 +37,10 @@ export function getSessionsPath(): string {
 	return join(getAgentDir(), "sessions.json");
 }
 
+export function getSkillsDir(agentDir: string = getAgentDir()): string {
+	return join(agentDir, "skills");
+}
+
 export function ensureAgentDir(): string {
 	const agentDir = getAgentDir();
 	if (!existsSync(agentDir)) {
