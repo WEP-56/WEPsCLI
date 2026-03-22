@@ -1,0 +1,59 @@
+{
+	"name": "wepscli",
+	"version": "0.1.0",
+	"description": "A TUI-first coding agent CLI built on top of agents-core",
+	"type": "module",
+	"bin": {
+		"wepscli": "dist/cli.js"
+	},
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"files": [
+		"dist",
+		"README.md"
+	],
+	"scripts": {
+		"clean": "shx rm -rf dist",
+		"build": "node ./scripts/ensure-runtime-deps.mjs && node ./scripts/build.mjs && shx chmod +x dist/cli.js",
+		"dev": "node ./scripts/build.mjs --watch",
+		"shell": "node ./dist/cli.js",
+		"shell:node": "node ./dist/cli.js",
+		"shell:bun": "bun --conditions=browser --preload @opentui/solid/preload ./dist/cli.js",
+		"smoke:hello": "bun --conditions=browser --preload @opentui/solid/preload ./smoke/hello.tsx",
+		"smoke:panel": "bun --conditions=browser --preload @opentui/solid/preload ./smoke/panel.tsx",
+		"smoke:shell-min": "bun --conditions=browser --preload @opentui/solid/preload ./smoke/shell-min.tsx",
+		"smoke:approval-flow": "bun ./smoke/approval-flow.ts",
+		"smoke:interrupt-status": "bun ./smoke/interrupt-status.ts",
+		"smoke:tool-events": "bun ./smoke/tool-events.ts",
+		"prepublishOnly": "npm run clean && npm run build"
+	},
+	"dependencies": {
+		"@mariozechner/pi-agent-core": "^0.61.0",
+		"@mariozechner/pi-ai": "^0.61.0",
+		"@mariozechner/pi-coding-agent": "^0.61.0",
+		"@mariozechner/pi-tui": "^0.61.0",
+		"@opentui/core": "^0.1.87",
+		"@opentui/solid": "^0.1.87",
+		"chalk": "^5.5.0",
+		"proper-lockfile": "^4.1.2",
+		"solid-js": "^1.9.9",
+		"undici": "^7.19.1"
+	},
+	"keywords": [
+		"coding-agent",
+		"tui",
+		"cli",
+		"ai",
+		"wepscli"
+	],
+	"author": "WEPsCodingCLI",
+	"license": "MIT",
+	"engines": {
+		"node": ">=20.0.0"
+	},
+	"devDependencies": {
+		"@types/node": "^24.3.0",
+		"shx": "^0.4.0",
+		"typescript": "^5.7.3"
+	}
+}

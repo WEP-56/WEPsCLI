@@ -1,0 +1,55 @@
+# OS / Explorer
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Editor / IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*.tmp
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+bun-debug.log*
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+!.env.sample
+*.local
+
+# Node / build outputs
+**/node_modules/
+**/dist/
+**/coverage/
+**/.cache/
+**/.parcel-cache/
+**/.turbo/
+**/*.tsbuildinfo
+
+# Local runtime / agent state
+.codex/
+.wepscli-test/
+.wepscli-history-test/
+tmp-wepscli-agent/
+agents-core/.pi/
+
+# Temporary workspace files
+tmp/
+tmp-*/
+**/tmp/
+**/tmp-*/
+
+# Patch / merge leftovers
+*.orig
+*.rej
+
+.codex/environments
+CLI/tui-learning
