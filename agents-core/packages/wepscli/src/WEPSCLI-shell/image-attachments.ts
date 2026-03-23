@@ -1,13 +1,48 @@
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import { basename, resolve } from "node:path";
-import {
-	detectSupportedImageMimeTypeFromFile,
-	extensionForImageMimeType,
-	readClipboardImage,
-	resizeImage,
-} from "@mariozechner/pi-coding-agent";
+import { basename, dirname, join, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import type { ImageContent } from "@mariozechner/pi-ai";
+
+type ClipboardImage = {
+	bytes: Uint8Array;
+	mimeType: string;
+};
+
+type ResizedImage = {
+	data: string;
+	mimeType: string;
+};
+
+type CodingAgentImageUtils = {
+	detectSupportedImageMimeTypeFromFile(filePath: string): Promise<string | null>;
+	extensionForImageMimeType(mimeType: string): string | null;
+	readClipboardImage(): Promise<ClipboardImage | null>;
+	resizeImage(image: ImageContent): Promise<ResizedImage>;
+};
+
+let codingAgentImageUtilsPromise: Promise<CodingAgentImageUtils> | undefined;
+
+async function loadCodingAgentImageUtils(): Promise<CodingAgentImageUtils> {
+	if (!codingAgentImageUtilsPromise) {
+		const codingAgentEntryUrl = await import.meta.resolve("@mariozechner/pi-coding-agent");
+		const codingAgentDistDir = dirname(fileURLToPath(codingAgentEntryUrl));
+		const moduleUrl = (fileName: string) => pathToFileURL(join(codingAgentDistDir, "utils", fileName)).href;
+
+		codingAgentImageUtilsPromise = Promise.all([
+			import(moduleUrl("clipboard-image.js")),
+			import(moduleUrl("image-resize.js")),
+			import(moduleUrl("mime.js")),
+		]).then(([clipboardModule, resizeModule, mimeModule]) => ({
+			detectSupportedImageMimeTypeFromFile: mimeModule.detectSupportedImageMimeTypeFromFile as CodingAgentImageUtils["detectSupportedImageMimeTypeFromFile"],
+			extensionForImageMimeType: clipboardModule.extensionForImageMimeType as CodingAgentImageUtils["extensionForImageMimeType"],
+			readClipboardImage: clipboardModule.readClipboardImage as CodingAgentImageUtils["readClipboardImage"],
+			resizeImage: resizeModule.resizeImage as CodingAgentImageUtils["resizeImage"],
+		}));
+	}
+
+	return codingAgentImageUtilsPromise;
+}
 
 export interface ChatImageAttachment {
 	id: string;
@@ -45,6 +80,7 @@ async function finalizeImage(image: ImageContent, autoResize: boolean): Promise<
 		};
 	}
 
+	const { resizeImage } = await loadCodingAgentImageUtils();
 	const resized = await resizeImage(image);
 	return {
 		type: "image",
@@ -97,6 +133,7 @@ export async function createComposerImageAttachmentFromFile(
 	}
 
 	const resolvedPath = resolve(options.cwd ?? process.cwd(), normalizedPath);
+	const { detectSupportedImageMimeTypeFromFile } = await loadCodingAgentImageUtils();
 	const mimeType = await detectSupportedImageMimeTypeFromFile(resolvedPath);
 	if (!mimeType) {
 		throw new Error("Only PNG, JPEG, GIF, and WebP files can be attached as images.");
@@ -125,6 +162,7 @@ export async function createComposerImageAttachmentFromFile(
 export async function createComposerImageAttachmentFromClipboard(options: {
 	autoResize?: boolean;
 } = {}): Promise<ComposerImageAttachment | null> {
+	const { extensionForImageMimeType, readClipboardImage } = await loadCodingAgentImageUtils();
 	const clipboardImage = await readClipboardImage();
 	if (!clipboardImage) {
 		return null;
