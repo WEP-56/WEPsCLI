@@ -1,12 +1,21 @@
+import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
-import { BRIDGE_CHANNELS, type DesktopAppContext } from "../shared/bridge.js";
+import {
+	BRIDGE_CHANNELS,
+	type CreateDesktopProviderProfileInput,
+	type DesktopAppContext,
+	type DesktopToolApprovalDecision,
+} from "../shared/bridge.js";
+import { DesktopController } from "./desktop-controller.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rendererDistPath = join(__dirname, "../renderer");
-const preloadPath = join(__dirname, "../preload/index.js");
-const devServerUrl = process.env.VITE_DEV_SERVER_URL;
+const preloadPath = join(__dirname, "../preload/index.mjs");
+const devServerUrl = process.env.ELECTRON_RENDERER_URL;
+
+let mainWindow: BrowserWindow | null = null;
+let controller: DesktopController | null = null;
 
 function createDesktopContext(): DesktopAppContext {
 	return {
@@ -42,6 +51,22 @@ async function handleChooseWorkspaceDirectory(window: BrowserWindow): Promise<st
 	return result.filePaths[0] ?? null;
 }
 
+async function loadWindowContent(window: BrowserWindow): Promise<void> {
+	if (devServerUrl) {
+		await window.loadURL(devServerUrl);
+		return;
+	}
+
+	await window.loadFile(join(rendererDistPath, "index.html"));
+}
+
+function emitSnapshot(): void {
+	if (!controller || !mainWindow || mainWindow.isDestroyed()) {
+		return;
+	}
+	mainWindow.webContents.send(BRIDGE_CHANNELS.snapshotUpdated, controller.getSnapshot());
+}
+
 async function createMainWindow(): Promise<BrowserWindow> {
 	const window = new BrowserWindow({
 		width: 1480,
@@ -59,6 +84,10 @@ async function createMainWindow(): Promise<BrowserWindow> {
 		},
 	});
 
+	if (devServerUrl) {
+		window.webContents.openDevTools({ mode: "detach" });
+	}
+
 	window.webContents.setWindowOpenHandler(({ url }) => {
 		void handleOpenExternal(url).catch(() => {});
 		return { action: "deny" };
@@ -71,33 +100,97 @@ async function createMainWindow(): Promise<BrowserWindow> {
 		event.preventDefault();
 		void handleOpenExternal(url).catch(() => {});
 	});
-
-	if (devServerUrl) {
-		await window.loadURL(devServerUrl);
-		return window;
-	}
-
-	await window.loadFile(join(rendererDistPath, "index.html"));
 	return window;
+}
+
+function registerIpcHandlers(): void {
+	ipcMain.removeHandler(BRIDGE_CHANNELS.getSnapshot);
+	ipcMain.handle(BRIDGE_CHANNELS.getSnapshot, () => controller?.getSnapshot());
+
+	ipcMain.removeHandler(BRIDGE_CHANNELS.activateWorkspace);
+	ipcMain.handle(BRIDGE_CHANNELS.activateWorkspace, async (_event, workspacePath: string) =>
+		controller?.activateWorkspace(workspacePath),
+	);
+
+	ipcMain.removeHandler(BRIDGE_CHANNELS.chooseWorkspaceDirectory);
+	ipcMain.handle(BRIDGE_CHANNELS.chooseWorkspaceDirectory, async () => {
+		if (!mainWindow) {
+			throw new Error("Main window is not available.");
+		}
+		return handleChooseWorkspaceDirectory(mainWindow);
+	});
+
+	ipcMain.removeHandler(BRIDGE_CHANNELS.createProviderProfile);
+	ipcMain.handle(BRIDGE_CHANNELS.createProviderProfile, async (_event, input: CreateDesktopProviderProfileInput) =>
+		controller?.createProviderProfile(input),
+	);
+
+	ipcMain.removeHandler(BRIDGE_CHANNELS.createSession);
+	ipcMain.handle(BRIDGE_CHANNELS.createSession, async () => controller?.createSession());
+
+	ipcMain.removeHandler(BRIDGE_CHANNELS.openExternal);
+	ipcMain.handle(BRIDGE_CHANNELS.openExternal, async (_event, url: string) => handleOpenExternal(url));
+
+	ipcMain.removeHandler(BRIDGE_CHANNELS.openSession);
+	ipcMain.handle(BRIDGE_CHANNELS.openSession, async (_event, sessionId: string) => controller?.openSession(sessionId));
+
+	ipcMain.removeHandler(BRIDGE_CHANNELS.refreshProviderModels);
+	ipcMain.handle(BRIDGE_CHANNELS.refreshProviderModels, async (_event, profileId: string) =>
+		controller?.refreshProviderModels(profileId),
+	);
+
+	ipcMain.removeHandler(BRIDGE_CHANNELS.resolveApproval);
+	ipcMain.handle(
+		BRIDGE_CHANNELS.resolveApproval,
+		async (_event, requestId: string, decision: DesktopToolApprovalDecision) =>
+			controller?.resolveApproval(requestId, decision),
+	);
+
+	ipcMain.removeHandler(BRIDGE_CHANNELS.sendPrompt);
+	ipcMain.handle(BRIDGE_CHANNELS.sendPrompt, async (_event, sessionId: string, text: string) =>
+		controller?.sendPrompt(sessionId, text),
+	);
+
+	ipcMain.removeHandler(BRIDGE_CHANNELS.setActiveSelection);
+	ipcMain.handle(BRIDGE_CHANNELS.setActiveSelection, async (_event, profileId: string, modelId?: string) =>
+		controller?.setActiveSelection(profileId, modelId),
+	);
+
+	ipcMain.removeHandler(BRIDGE_CHANNELS.abortSession);
+	ipcMain.handle(BRIDGE_CHANNELS.abortSession, async (_event, sessionId: string) =>
+		controller?.abortSession(sessionId),
+	);
 }
 
 app.setName("WEPS Desktop");
 
-app.whenReady().then(async () => {
-	const mainWindow = await createMainWindow();
+app.whenReady()
+	.then(async () => {
+		controller = new DesktopController(
+			createDesktopContext(),
+			join(app.getPath("userData"), "workspace-state.json"),
+			() => emitSnapshot(),
+		);
+		registerIpcHandlers();
+		mainWindow = await createMainWindow();
+		await loadWindowContent(mainWindow);
 
-	ipcMain.handle(BRIDGE_CHANNELS.getAppContext, () => createDesktopContext());
-	ipcMain.handle(BRIDGE_CHANNELS.chooseWorkspaceDirectory, async () => handleChooseWorkspaceDirectory(mainWindow));
-	ipcMain.handle(BRIDGE_CHANNELS.openExternal, async (_event, url: string) => handleOpenExternal(url));
-
-	app.on("activate", async () => {
-		if (BrowserWindow.getAllWindows().length === 0) {
-			await createMainWindow();
-		}
+		app.on("activate", async () => {
+			if (BrowserWindow.getAllWindows().length === 0) {
+				mainWindow = await createMainWindow();
+				await loadWindowContent(mainWindow);
+			}
+		});
+	})
+	.catch((error) => {
+		console.error("Failed to start WEPS Desktop:", error);
+		app.quit();
 	});
-});
 
 app.on("window-all-closed", () => {
+	controller?.dispose();
+	controller = null;
+	mainWindow = null;
 	if (process.platform !== "darwin") {
 		app.quit();
 	}

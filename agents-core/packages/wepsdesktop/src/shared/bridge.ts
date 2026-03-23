@@ -1,7 +1,17 @@
 export const BRIDGE_CHANNELS = {
-	getAppContext: "wepsdesktop:get-app-context",
+	getSnapshot: "wepsdesktop:get-snapshot",
+	activateWorkspace: "wepsdesktop:activate-workspace",
 	chooseWorkspaceDirectory: "wepsdesktop:choose-workspace-directory",
+	createProviderProfile: "wepsdesktop:create-provider-profile",
+	createSession: "wepsdesktop:create-session",
 	openExternal: "wepsdesktop:open-external",
+	openSession: "wepsdesktop:open-session",
+	refreshProviderModels: "wepsdesktop:refresh-provider-models",
+	resolveApproval: "wepsdesktop:resolve-approval",
+	sendPrompt: "wepsdesktop:send-prompt",
+	setActiveSelection: "wepsdesktop:set-active-selection",
+	abortSession: "wepsdesktop:abort-session",
+	snapshotUpdated: "wepsdesktop:snapshot-updated",
 } as const;
 
 export interface DesktopAppContext {
@@ -17,8 +27,166 @@ export interface DesktopAppContext {
 	};
 }
 
+export type DesktopProviderFamily = "openai" | "anthropic";
+export type DesktopProviderApiDialect = "openai-responses" | "openai-completions" | "anthropic-messages";
+export type DesktopValidationStatus = "unknown" | "ok" | "error";
+export type DesktopSessionState = "active" | "ready" | "recent";
+export type DesktopChatMessageRole = "system" | "user" | "assistant";
+export type DesktopChatMessageKind = "default" | "status" | "tool" | "reasoning";
+export type DesktopRuntimePhase = "idle" | "running" | "retrying" | "compacting" | "interrupted" | "error";
+export type DesktopToolMessageStatus = "awaiting_approval" | "running" | "completed" | "failed";
+export type DesktopToolApprovalDecision = "allow" | "reject" | "cancel";
+
+export interface DesktopDiscoveredModel {
+	id: string;
+	name: string;
+	family: DesktopProviderFamily;
+}
+
+export interface DesktopProviderProfile {
+	id: string;
+	label: string;
+	family: DesktopProviderFamily;
+	apiDialect: DesktopProviderApiDialect;
+	baseUrl: string;
+	enabled: boolean;
+	models: DesktopDiscoveredModel[];
+	createdAt: string;
+	updatedAt: string;
+	lastValidatedAt?: string;
+	lastValidationStatus: DesktopValidationStatus;
+	lastValidationMessage?: string;
+}
+
+export interface DesktopSessionRecord {
+	id: string;
+	title: string;
+	summary: string;
+	state: DesktopSessionState;
+	createdAt: string;
+	updatedAt: string;
+	workspacePath?: string;
+	providerProfileId?: string;
+	providerLabel?: string;
+	modelId?: string;
+	lastPrompt?: string;
+	runtimeSessionFile?: string;
+}
+
+export interface DesktopSelection {
+	profileId?: string;
+	modelId?: string;
+}
+
+export interface DesktopToolDiffStats {
+	added: number;
+	removed: number;
+	context: number;
+	meta: number;
+}
+
+export interface DesktopToolDiffLine {
+	kind: "added" | "removed" | "context" | "meta";
+	lineNumber?: string;
+	content: string;
+	rawText: string;
+}
+
+export interface DesktopToolFileChange {
+	kind: "edit" | "write";
+	path: string;
+	summary: string;
+	firstChangedLine?: number;
+	diffText?: string;
+	diffLines?: DesktopToolDiffLine[];
+	diffStats?: DesktopToolDiffStats;
+	previewText?: string;
+}
+
+export interface DesktopToolMessageState {
+	toolCallId: string;
+	toolName: string;
+	status: DesktopToolMessageStatus;
+	argsText: string;
+	outputText: string;
+	fileChanges: DesktopToolFileChange[];
+}
+
+export interface DesktopChatMessage {
+	id: string;
+	role: DesktopChatMessageRole;
+	content: string;
+	time: string;
+	kind?: DesktopChatMessageKind;
+	collapsible?: boolean;
+	expanded?: boolean;
+	tool?: DesktopToolMessageState;
+}
+
+export interface DesktopRuntimeState {
+	phase: DesktopRuntimePhase;
+	label: string;
+	detail?: string;
+	interruptible: boolean;
+	canContinue: boolean;
+}
+
+export interface DesktopToolApprovalRequest {
+	id: string;
+	sessionId: string;
+	toolCallId: string;
+	toolName: string;
+	riskLabel: string;
+	reason: string;
+	summary: string;
+	argsText: string;
+	commandText?: string;
+	fileChanges: DesktopToolFileChange[];
+}
+
+export interface DesktopSessionSnapshot {
+	record: DesktopSessionRecord;
+	messages: DesktopChatMessage[];
+	runtimeState: DesktopRuntimeState;
+	selection: DesktopSelection;
+	pendingApproval?: DesktopToolApprovalRequest;
+}
+
+export interface DesktopSnapshot {
+	appContext: DesktopAppContext;
+	agentDir: string;
+	currentWorkspacePath?: string;
+	recentWorkspaces: string[];
+	providerProfiles: DesktopProviderProfile[];
+	activeSelection: DesktopSelection;
+	sessions: DesktopSessionRecord[];
+	activeSession?: DesktopSessionSnapshot;
+}
+
+export interface CreateDesktopProviderProfileInput {
+	label: string;
+	family: DesktopProviderFamily;
+	baseUrl: string;
+	apiKey: string;
+	apiDialect?: DesktopProviderApiDialect;
+}
+
+export interface DesktopSnapshotListener {
+	(snapshot: DesktopSnapshot): void;
+}
+
 export interface WepsDesktopBridge {
-	getAppContext(): Promise<DesktopAppContext>;
+	getSnapshot(): Promise<DesktopSnapshot>;
+	activateWorkspace(workspacePath: string): Promise<DesktopSnapshot>;
 	chooseWorkspaceDirectory(): Promise<string | null>;
+	createProviderProfile(input: CreateDesktopProviderProfileInput): Promise<DesktopSnapshot>;
+	createSession(): Promise<DesktopSnapshot>;
+	onSnapshot(listener: DesktopSnapshotListener): () => void;
 	openExternal(url: string): Promise<void>;
+	openSession(sessionId: string): Promise<DesktopSnapshot>;
+	refreshProviderModels(profileId: string): Promise<DesktopSnapshot>;
+	resolveApproval(requestId: string, decision: DesktopToolApprovalDecision): Promise<DesktopSnapshot>;
+	sendPrompt(sessionId: string, text: string): Promise<void>;
+	setActiveSelection(profileId: string, modelId?: string): Promise<DesktopSnapshot>;
+	abortSession(sessionId: string): Promise<DesktopSnapshot>;
 }

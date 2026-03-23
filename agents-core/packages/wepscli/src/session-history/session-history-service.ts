@@ -11,6 +11,7 @@ export interface ShellSessionRecord {
 	state: ShellSessionState;
 	createdAt: string;
 	updatedAt: string;
+	workspacePath?: string;
 	providerProfileId?: string;
 	providerLabel?: string;
 	modelId?: string;
@@ -27,6 +28,7 @@ interface CreateShellSessionInput {
 	title: string;
 	summary: string;
 	state?: ShellSessionState;
+	workspacePath?: string;
 	providerProfileId?: string;
 	providerLabel?: string;
 	modelId?: string;
@@ -38,6 +40,7 @@ interface UpdateShellSessionInput {
 	title?: string;
 	summary?: string;
 	state?: ShellSessionState;
+	workspacePath?: string;
 	providerProfileId?: string;
 	providerLabel?: string;
 	modelId?: string;
@@ -67,12 +70,21 @@ export class SessionHistoryService {
 		this.storage = new LockedJsonFile<SessionsConfig>(filePath, createDefaultSessionsConfig());
 	}
 
-	listSessions(): ShellSessionRecord[] {
+	listSessions(workspacePath?: string): ShellSessionRecord[] {
 		const config = this.storage.read();
-		return config.sessions
+		const sessions = workspacePath
+			? config.sessions.filter((session) => session.workspacePath === workspacePath)
+			: config.sessions;
+		return sessions
 			.slice()
 			.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
 			.map(cloneSession);
+	}
+
+	getSession(sessionId: string): ShellSessionRecord | undefined {
+		const config = this.storage.read();
+		const session = config.sessions.find((record) => record.id === sessionId);
+		return session ? cloneSession(session) : undefined;
 	}
 
 	ensureSeed(seed: CreateShellSessionInput[]): ShellSessionRecord[] {
@@ -94,6 +106,7 @@ export class SessionHistoryService {
 				state: item.state ?? "ready",
 				createdAt: timestamp,
 				updatedAt: timestamp,
+				workspacePath: item.workspacePath,
 				providerProfileId: item.providerProfileId,
 				providerLabel: item.providerLabel,
 				modelId: item.modelId,
@@ -121,6 +134,7 @@ export class SessionHistoryService {
 				state: input.state ?? "ready",
 				createdAt: timestamp,
 				updatedAt: timestamp,
+				workspacePath: input.workspacePath,
 				providerProfileId: input.providerProfileId,
 				providerLabel: input.providerLabel,
 				modelId: input.modelId,
@@ -151,6 +165,7 @@ export class SessionHistoryService {
 				title: input.title ?? existing.title,
 				summary: input.summary ?? existing.summary,
 				state: input.state ?? existing.state,
+				workspacePath: input.workspacePath ?? existing.workspacePath,
 				providerProfileId: input.providerProfileId ?? existing.providerProfileId,
 				providerLabel: input.providerLabel ?? existing.providerLabel,
 				modelId: input.modelId ?? existing.modelId,
