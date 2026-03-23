@@ -1,5 +1,5 @@
 import { useRenderer, useTerminalDimensions } from "@opentui/solid";
-import { createEffect, createMemo, createSignal, onMount } from "solid-js";
+import { createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js";
 import type { ProviderProfile, ProviderProfileService } from "../provider-profiles/index.js";
 import { SessionHistoryService } from "../session-history/session-history-service.js";
 import { getAgentDir } from "../config.js";
@@ -75,6 +75,7 @@ export function WEPSCLIShellApp(props: { profileService: ProviderProfileService;
 	let transcriptScroll: { scrollTo(position: number): void; scrollHeight: number; isDestroyed?: boolean } | undefined;
 	let closed = false;
 	let transcriptScrollTimer: ReturnType<typeof setTimeout> | undefined;
+	let unsubscribeSessionHistory: (() => void) | undefined;
 	const providerAddFlow = createProviderAddFlow({
 		profileService: props.profileService,
 		onCreated: ({ profile, modelId }) => {
@@ -161,7 +162,26 @@ export function WEPSCLIShellApp(props: { profileService: ProviderProfileService;
 				return [];
 		}
 	});
-	onMount(() => { writeShellDebugLog(`mounted chat shell profiles=${profiles().length} sessions=${sessionHistory.listSessions().length}`); void reloadSkillSlashCommands(); setTimeout(() => composerRef?.focus(), 10); });
+	onMount(() => {
+		writeShellDebugLog(`mounted chat shell profiles=${profiles().length} sessions=${sessionHistory.listSessions().length}`);
+		unsubscribeSessionHistory = sessionHistory.subscribe((nextSessions) => {
+			setSessions(nextSessions);
+			const currentId = activeSessionId();
+			if (currentId) {
+				if (nextSessions.some((session) => session.id === currentId)) {
+					syncActiveSelectionFromSession(currentId);
+				} else {
+					setActiveSessionId(nextSessions[0]?.id);
+				}
+			}
+			requestRender();
+		});
+		void reloadSkillSlashCommands();
+		setTimeout(() => composerRef?.focus(), 10);
+	});
+	onCleanup(() => {
+		unsubscribeSessionHistory?.();
+	});
 	createEffect(() => { runtime.setMode(shellMode()); });
 	createEffect(() => {
 		const session = currentSession();

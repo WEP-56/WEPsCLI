@@ -3,10 +3,13 @@ export const BRIDGE_CHANNELS = {
 	getWindowState: "wepsdesktop:get-window-state",
 	activateWorkspace: "wepsdesktop:activate-workspace",
 	chooseWorkspaceDirectory: "wepsdesktop:choose-workspace-directory",
+	closeWorkspace: "wepsdesktop:close-workspace",
 	createProviderProfile: "wepsdesktop:create-provider-profile",
 	createSession: "wepsdesktop:create-session",
+	deleteSession: "wepsdesktop:delete-session",
 	openExternal: "wepsdesktop:open-external",
 	openSession: "wepsdesktop:open-session",
+	archiveSession: "wepsdesktop:archive-session",
 	refreshProviderModels: "wepsdesktop:refresh-provider-models",
 	resolveApproval: "wepsdesktop:resolve-approval",
 	sendPrompt: "wepsdesktop:send-prompt",
@@ -194,12 +197,15 @@ export interface WepsDesktopBridge {
 	getWindowState(): Promise<DesktopWindowState>;
 	activateWorkspace(workspacePath: string): Promise<DesktopSnapshot>;
 	chooseWorkspaceDirectory(): Promise<string | null>;
+	closeWorkspace(): Promise<DesktopSnapshot>;
 	createProviderProfile(input: CreateDesktopProviderProfileInput): Promise<DesktopSnapshot>;
 	createSession(): Promise<DesktopSnapshot>;
+	deleteSession(sessionId: string): Promise<DesktopSnapshot>;
 	onSnapshot(listener: DesktopSnapshotListener): () => void;
 	onWindowState(listener: DesktopWindowStateListener): () => void;
 	openExternal(url: string): Promise<void>;
 	openSession(sessionId: string): Promise<DesktopSnapshot>;
+	archiveSession(sessionId: string): Promise<DesktopSnapshot>;
 	refreshProviderModels(profileId: string): Promise<DesktopSnapshot>;
 	resolveApproval(requestId: string, decision: DesktopToolApprovalDecision): Promise<DesktopSnapshot>;
 	sendPrompt(sessionId: string, text: string): Promise<void>;

@@ -35,3 +35,11 @@ npm run dev
 npm run build
 npm run check
 ```
+## 构建可发行包
+
+```bash
+cd D:\WEPsCodingCLI\agents-core\packages\wepsdesktop
+npm install
+npm run pack:win
+打包产物将会放在：D:\WEPsCodingCLI\agents-core\packages\wepsdesktop\dist\release
+```

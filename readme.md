@@ -2,12 +2,14 @@
 
 `WEPsCodingCLI` 是一个本地开发工作区，核心目标是在 `agents-core/packages/wepscli` 上持续构建一个 TUI-first、desktop-second 的 coding agent CLI，并逐步把 shell、runtime、审批、中断、会话等能力接到真实共享 runtime。
 
-当前仓库不是一个“纯净的单包项目”，而是一个围绕 `wepscli` 的研发工作区，包含：
+当前仓库不是一个“纯净的单包项目”，而是一个围绕 `wepscli`与 `wepsdesktop`的研发工作区，包含：
 
 - `agents-core/`
   基于 `pi` monorepo 的共享能力层，里面有 `ai`、`agent`、`coding-agent`、`wepscli` 等 package。
 - `agents-core/packages/wepscli/`
   当前主开发目标，新的 WEPSCLI TUI 壳和运行时接线都在这里。
+- `agents-core\packages\wepsdesktop`
+  次要目标，electron桌面app壳
 - `docs/`
   项目文档目录。
 - `TODO.md`（稳健阶段）、`TODO2.md`（堆料阶段）
@@ -42,13 +44,12 @@ user/username/.wepscli
 ```text
 WEPsCodingCLI/
 ├─ agents-core/
-│  ├─ packages/
-│  │  ├─ agent/
-│  │  ├─ ai/
-│  │  ├─ coding-agent/
-│  │  └─ wepscli/
-├─ CLI/
-│  └─ tui-learning/
+│  └─ packages/
+│    ├─ agent/
+│    ├─ ai/
+│    ├─ coding-agent/
+│    ├─ wepscli/
+│    └─ wepsdesktop/
 ├─ docs/
 ├─ TODO.md
 ├─ LICENSE
@@ -92,6 +93,17 @@ cd D:\WEPsCodingCLI\agents-core\packages\wepscli
 node ./scripts/build.mjs
 npx tsc -p tsconfig.build.json --noEmit
 ```
+
+### 启动与构建桌面端
+
+```powershell
+cd D:\WEPsCodingCLI\agents-core\packages\wepsdesktop
+npm install
+npm run build
+npm run dev -启动开发版本
+npm run pack:win -打包windows版本setup包
+```
+
 
 ## 仓库说明
 

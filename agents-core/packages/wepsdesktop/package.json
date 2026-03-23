@@ -1,14 +1,19 @@
 {
 	"name": "wepsdesktop",
-	"version": "0.1.0",
+	"version": "0.1.3",
 	"private": true,
+	"description": "WEPS Desktop",
+	"author": "WEPsCodingCLI",
 	"type": "module",
 	"main": "./out/main/index.js",
 	"scripts": {
 		"dev": "electron-vite dev",
 		"build": "electron-vite build",
 		"check": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
-		"clean": "shx rm -rf dist out"
+		"clean": "shx rm -rf dist out",
+		"postinstall": "electron-builder install-app-deps",
+		"pack:dir": "npm run build && electron-builder --dir",
+		"pack:win": "npm run build && electron-builder --win nsis"
 	},
 	"dependencies": {
 		"@mariozechner/mini-lit": "^0.2.0",
@@ -19,8 +24,42 @@
 	},
 	"devDependencies": {
 		"electron": "40.4.1",
+		"electron-builder": "^26.0.12",
 		"electron-vite": "^5.0.0",
 		"shx": "^0.4.0",
 		"typescript": "^5.7.3"
+	},
+	"build": {
+		"appId": "com.weps.wepsdesktop",
+		"productName": "WEPS Desktop",
+		"icon": "icon.ico",
+		"directories": {
+			"output": "dist/release"
+		},
+		"files": [
+			"out/**/*",
+			"package.json"
+		],
+		"asar": true,
+		"npmRebuild": false,
+		"win": {
+			"icon": "icon.ico",
+			"target": [
+				{
+					"target": "nsis",
+					"arch": [
+						"x64"
+					]
+				}
+			],
+			"artifactName": "WEPS-Desktop-Setup-${version}.${ext}"
+		},
+		"nsis": {
+			"oneClick": false,
+			"allowToChangeInstallationDirectory": true,
+			"createDesktopShortcut": true,
+			"createStartMenuShortcut": true,
+			"shortcutName": "WEPS Desktop"
+		}
 	}
 }

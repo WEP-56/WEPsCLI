@@ -17,9 +17,12 @@ const bridge: WepsDesktopBridge = {
 		ipcRenderer.invoke(BRIDGE_CHANNELS.activateWorkspace, workspacePath) as Promise<DesktopSnapshot>,
 	chooseWorkspaceDirectory: () =>
 		ipcRenderer.invoke(BRIDGE_CHANNELS.chooseWorkspaceDirectory) as Promise<string | null>,
+	closeWorkspace: () => ipcRenderer.invoke(BRIDGE_CHANNELS.closeWorkspace) as Promise<DesktopSnapshot>,
 	createProviderProfile: (input: CreateDesktopProviderProfileInput) =>
 		ipcRenderer.invoke(BRIDGE_CHANNELS.createProviderProfile, input) as Promise<DesktopSnapshot>,
 	createSession: () => ipcRenderer.invoke(BRIDGE_CHANNELS.createSession) as Promise<DesktopSnapshot>,
+	deleteSession: (sessionId: string) =>
+		ipcRenderer.invoke(BRIDGE_CHANNELS.deleteSession, sessionId) as Promise<DesktopSnapshot>,
 	onSnapshot: (listener: DesktopSnapshotListener) => {
 		const wrapped = (_event: Electron.IpcRendererEvent, snapshot: DesktopSnapshot) => {
 			listener(snapshot);
@@ -41,6 +44,8 @@ const bridge: WepsDesktopBridge = {
 	openExternal: (url: string) => ipcRenderer.invoke(BRIDGE_CHANNELS.openExternal, url) as Promise<void>,
 	openSession: (sessionId: string) =>
 		ipcRenderer.invoke(BRIDGE_CHANNELS.openSession, sessionId) as Promise<DesktopSnapshot>,
+	archiveSession: (sessionId: string) =>
+		ipcRenderer.invoke(BRIDGE_CHANNELS.archiveSession, sessionId) as Promise<DesktopSnapshot>,
 	refreshProviderModels: (profileId: string) =>
 		ipcRenderer.invoke(BRIDGE_CHANNELS.refreshProviderModels, profileId) as Promise<DesktopSnapshot>,
 	resolveApproval: (requestId: string, decision: DesktopToolApprovalDecision) =>

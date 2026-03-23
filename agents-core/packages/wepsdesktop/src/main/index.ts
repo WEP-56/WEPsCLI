@@ -149,6 +149,9 @@ function registerIpcHandlers(): void {
 		return handleChooseWorkspaceDirectory(mainWindow);
 	});
 
+	ipcMain.removeHandler(BRIDGE_CHANNELS.closeWorkspace);
+	ipcMain.handle(BRIDGE_CHANNELS.closeWorkspace, async () => controller?.closeWorkspace());
+
 	ipcMain.removeHandler(BRIDGE_CHANNELS.createProviderProfile);
 	ipcMain.handle(BRIDGE_CHANNELS.createProviderProfile, async (_event, input: CreateDesktopProviderProfileInput) =>
 		controller?.createProviderProfile(input),
@@ -157,11 +160,21 @@ function registerIpcHandlers(): void {
 	ipcMain.removeHandler(BRIDGE_CHANNELS.createSession);
 	ipcMain.handle(BRIDGE_CHANNELS.createSession, async () => controller?.createSession());
 
+	ipcMain.removeHandler(BRIDGE_CHANNELS.deleteSession);
+	ipcMain.handle(BRIDGE_CHANNELS.deleteSession, async (_event, sessionId: string) =>
+		controller?.deleteSession(sessionId),
+	);
+
 	ipcMain.removeHandler(BRIDGE_CHANNELS.openExternal);
 	ipcMain.handle(BRIDGE_CHANNELS.openExternal, async (_event, url: string) => handleOpenExternal(url));
 
 	ipcMain.removeHandler(BRIDGE_CHANNELS.openSession);
 	ipcMain.handle(BRIDGE_CHANNELS.openSession, async (_event, sessionId: string) => controller?.openSession(sessionId));
+
+	ipcMain.removeHandler(BRIDGE_CHANNELS.archiveSession);
+	ipcMain.handle(BRIDGE_CHANNELS.archiveSession, async (_event, sessionId: string) =>
+		controller?.archiveSession(sessionId),
+	);
 
 	ipcMain.removeHandler(BRIDGE_CHANNELS.refreshProviderModels);
 	ipcMain.handle(BRIDGE_CHANNELS.refreshProviderModels, async (_event, profileId: string) =>

@@ -4,10 +4,13 @@ const BRIDGE_CHANNELS = {
   getWindowState: "wepsdesktop:get-window-state",
   activateWorkspace: "wepsdesktop:activate-workspace",
   chooseWorkspaceDirectory: "wepsdesktop:choose-workspace-directory",
+  closeWorkspace: "wepsdesktop:close-workspace",
   createProviderProfile: "wepsdesktop:create-provider-profile",
   createSession: "wepsdesktop:create-session",
+  deleteSession: "wepsdesktop:delete-session",
   openExternal: "wepsdesktop:open-external",
   openSession: "wepsdesktop:open-session",
+  archiveSession: "wepsdesktop:archive-session",
   refreshProviderModels: "wepsdesktop:refresh-provider-models",
   resolveApproval: "wepsdesktop:resolve-approval",
   sendPrompt: "wepsdesktop:send-prompt",
@@ -24,8 +27,10 @@ const bridge = {
   getWindowState: () => ipcRenderer.invoke(BRIDGE_CHANNELS.getWindowState),
   activateWorkspace: (workspacePath) => ipcRenderer.invoke(BRIDGE_CHANNELS.activateWorkspace, workspacePath),
   chooseWorkspaceDirectory: () => ipcRenderer.invoke(BRIDGE_CHANNELS.chooseWorkspaceDirectory),
+  closeWorkspace: () => ipcRenderer.invoke(BRIDGE_CHANNELS.closeWorkspace),
   createProviderProfile: (input) => ipcRenderer.invoke(BRIDGE_CHANNELS.createProviderProfile, input),
   createSession: () => ipcRenderer.invoke(BRIDGE_CHANNELS.createSession),
+  deleteSession: (sessionId) => ipcRenderer.invoke(BRIDGE_CHANNELS.deleteSession, sessionId),
   onSnapshot: (listener) => {
     const wrapped = (_event, snapshot) => {
       listener(snapshot);
@@ -46,6 +51,7 @@ const bridge = {
   },
   openExternal: (url) => ipcRenderer.invoke(BRIDGE_CHANNELS.openExternal, url),
   openSession: (sessionId) => ipcRenderer.invoke(BRIDGE_CHANNELS.openSession, sessionId),
+  archiveSession: (sessionId) => ipcRenderer.invoke(BRIDGE_CHANNELS.archiveSession, sessionId),
   refreshProviderModels: (profileId) => ipcRenderer.invoke(BRIDGE_CHANNELS.refreshProviderModels, profileId),
   resolveApproval: (requestId, decision) => ipcRenderer.invoke(BRIDGE_CHANNELS.resolveApproval, requestId, decision),
   sendPrompt: (sessionId, text) => ipcRenderer.invoke(BRIDGE_CHANNELS.sendPrompt, sessionId, text),

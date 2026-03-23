@@ -14,6 +14,17 @@ import type {
 } from "../src/shared/bridge.js";
 
 type ProviderDraft = CreateDesktopProviderProfileInput;
+type ComposerMenu = "model" | "provider";
+
+type WorkspaceSummary = {
+	path: string;
+	name: string;
+	isCurrent: boolean;
+	sessionCount: number;
+	lastUpdated?: string;
+	lastTitle?: string;
+	providerLabel?: string;
+};
 
 let snapshot: DesktopSnapshot | null = null;
 let unsubscribeSnapshot: (() => void) | undefined;
@@ -24,6 +35,8 @@ let statusTimer: number | undefined;
 let isBusy = false;
 let sidebarOpen = true;
 let detailsOpen = false;
+let workspaceSwitcherOpen = false;
+let composerMenuOpen: ComposerMenu | null = null;
 let windowState: DesktopWindowState = {
 	isFullScreen: false,
 	isMaximized: false,
@@ -57,7 +70,7 @@ function truncate(value: string, maxLength: number): string {
 
 function basenamePath(value?: string): string {
 	if (!value) {
-		return "No workspace";
+		return "未选择工作区";
 	}
 	const parts = value.split(/[\\/]/).filter(Boolean);
 	return parts[parts.length - 1] ?? value;
@@ -65,7 +78,7 @@ function basenamePath(value?: string): string {
 
 function formatTimestamp(value?: string): string {
 	if (!value) {
-		return "Now";
+		return "现在";
 	}
 	const date = new Date(value);
 	if (Number.isNaN(date.getTime())) {
@@ -151,6 +164,39 @@ function activeModelName(): string | undefined {
 	return profile?.models.find((model) => model.id === modelId)?.name ?? modelId;
 }
 
+function workspaceSummaries(): WorkspaceSummary[] {
+	const currentWorkspacePath = snapshot?.currentWorkspacePath;
+	const paths = Array.from(
+		new Set([currentWorkspacePath, ...(snapshot?.recentWorkspaces ?? [])].filter((value): value is string => Boolean(value))),
+	);
+
+	return paths.map((workspacePath) => {
+		const sessions = (snapshot?.sessions ?? [])
+			.filter((session) => session.workspacePath === workspacePath)
+			.sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime());
+		const latestSession = sessions[0];
+
+		return {
+			path: workspacePath,
+			name: basenamePath(workspacePath),
+			isCurrent: workspacePath === currentWorkspacePath,
+			sessionCount: sessions.length,
+			lastUpdated: latestSession?.updatedAt,
+			lastTitle: latestSession?.title,
+			providerLabel: latestSession?.providerLabel,
+		};
+	});
+}
+
+function otherSessions(limit = 4): DesktopSessionRecord[] {
+	const currentId = activeSessionRecord()?.id;
+	return (snapshot?.sessions ?? []).filter((session) => session.id !== currentId).slice(0, limit);
+}
+
+function activeMessageCount(): number {
+	return activeSession()?.messages.length ?? 0;
+}
+
 function runtimeTone(phase?: DesktopRuntimeState["phase"]): string {
 	switch (phase) {
 		case "running":
@@ -210,17 +256,108 @@ function messageKindLabel(message: DesktopChatMessage): string {
 		case "status":
 			return "状态";
 		default:
-			return message.role === "user" ? "你" : message.role === "assistant" ? "WEPS" : "系统";
+			if (message.role === "user") {
+				return "你";
+			}
+			if (message.role === "assistant") {
+				return "WEPS";
+			}
+			return "系统";
 	}
+}
+
+function messageAuthorLabel(message: DesktopChatMessage): string {
+	if (message.kind === "reasoning") {
+		return "WEPS · 思考";
+	}
+	if (message.kind === "tool") {
+		return "工具输出";
+	}
+	if (message.kind === "status") {
+		return "系统状态";
+	}
+	return message.role === "user" ? "你" : message.role === "assistant" ? "WEPS" : "系统";
+}
+
+function messageAvatarLabel(message: DesktopChatMessage): string {
+	if (message.kind === "tool") {
+		return "T";
+	}
+	if (message.kind === "status") {
+		return "S";
+	}
+	return message.role === "user" ? "你" : "W";
+}
+
+function messageBubbleTone(message: DesktopChatMessage): string {
+	if (message.kind === "reasoning") {
+		return "message-bubble--reasoning";
+	}
+	if (message.kind === "tool") {
+		return "message-bubble--tool";
+	}
+	if (message.kind === "status" || message.role === "system") {
+		return "message-bubble--system";
+	}
+	if (message.role === "user") {
+		return "message-bubble--user";
+	}
+	return "message-bubble--assistant";
+}
+
+function sessionHeading(): string {
+	const session = activeSessionRecord();
+	if (session) {
+		return truncate(session.title || "未命名会话", 72);
+	}
+	return "开始一个新的桌面对话";
+}
+
+function sessionSummaryText(): string {
+	const session = activeSessionRecord();
+	if (session?.summary) {
+		return session.summary;
+	}
+	if (session) {
+		return "继续这个会话，桌面端会保持与 WEPS CLI 的数据目录同步。";
+	}
+	return "会话、Provider 和模型选择都继续复用 CLI 的共享数据，只重新整理交互和可视化。";
 }
 
 function openDetails(): void {
 	detailsOpen = true;
+	workspaceSwitcherOpen = false;
+	composerMenuOpen = null;
 	requestRender();
 }
 
 function closeDetails(): void {
 	detailsOpen = false;
+	requestRender();
+}
+
+function openWorkspaceSwitcher(): void {
+	workspaceSwitcherOpen = true;
+	detailsOpen = false;
+	composerMenuOpen = null;
+	requestRender();
+}
+
+function closeWorkspaceSwitcher(): void {
+	workspaceSwitcherOpen = false;
+	requestRender();
+}
+
+function toggleComposerMenu(menu: ComposerMenu): void {
+	composerMenuOpen = composerMenuOpen === menu ? null : menu;
+	requestRender();
+}
+
+function closeComposerMenu(): void {
+	if (!composerMenuOpen) {
+		return;
+	}
+	composerMenuOpen = null;
 	requestRender();
 }
 
@@ -263,6 +400,7 @@ async function activateWorkspace(workspacePath: string): Promise<void> {
 	await runTask(async () => {
 		snapshot = await window.wepsDesktop.activateWorkspace(workspacePath);
 		detailsOpen = false;
+		workspaceSwitcherOpen = false;
 		setStatus(`已切换到工作区：${basenamePath(workspacePath)}`);
 	});
 }
@@ -275,13 +413,35 @@ async function chooseWorkspace(): Promise<void> {
 		}
 		snapshot = await window.wepsDesktop.activateWorkspace(workspacePath);
 		detailsOpen = false;
+		workspaceSwitcherOpen = false;
 		setStatus(`已选择工作区：${basenamePath(workspacePath)}`);
+	});
+}
+
+async function activateWorkspaceFromSwitcher(workspacePath: string): Promise<void> {
+	closeWorkspaceSwitcher();
+	await activateWorkspace(workspacePath);
+}
+
+async function chooseWorkspaceFromSwitcher(): Promise<void> {
+	closeWorkspaceSwitcher();
+	await chooseWorkspace();
+}
+
+async function closeCurrentWorkspace(): Promise<void> {
+	await runTask(async () => {
+		snapshot = await window.wepsDesktop.closeWorkspace();
+		workspaceSwitcherOpen = false;
+		detailsOpen = false;
+		composerMenuOpen = null;
+		setStatus("已关闭当前工作区。");
 	});
 }
 
 async function openSession(sessionId: string): Promise<void> {
 	await runTask(async () => {
 		snapshot = await window.wepsDesktop.openSession(sessionId);
+		composerMenuOpen = null;
 		setStatus("会话已打开。");
 	});
 }
@@ -289,7 +449,27 @@ async function openSession(sessionId: string): Promise<void> {
 async function createSession(): Promise<void> {
 	await runTask(async () => {
 		snapshot = await window.wepsDesktop.createSession();
+		composerMenuOpen = null;
 		setStatus("已创建新会话。");
+	});
+}
+
+async function archiveSession(sessionId: string): Promise<void> {
+	await runTask(async () => {
+		snapshot = await window.wepsDesktop.archiveSession(sessionId);
+		setStatus("线程已归档。");
+	});
+}
+
+async function deleteSession(sessionId: string): Promise<void> {
+	const confirmed = window.confirm("确认永久删除这个线程吗？该操作会同时移除对应的会话记录。");
+	if (!confirmed) {
+		return;
+	}
+
+	await runTask(async () => {
+		snapshot = await window.wepsDesktop.deleteSession(sessionId);
+		setStatus("线程已删除。");
 	});
 }
 
@@ -349,6 +529,12 @@ async function setProfileSelection(profileId: string): Promise<void> {
 	});
 }
 
+async function selectProfileFromComposer(profileId: string): Promise<void> {
+	composerMenuOpen = null;
+	requestRender();
+	await setProfileSelection(profileId);
+}
+
 async function setModelSelection(modelId: string): Promise<void> {
 	const profileId = snapshot?.activeSelection.profileId;
 	if (!profileId) {
@@ -359,6 +545,12 @@ async function setModelSelection(modelId: string): Promise<void> {
 		snapshot = await window.wepsDesktop.setActiveSelection(profileId, modelId);
 		setStatus(`当前模型：${modelId}`);
 	});
+}
+
+async function selectModelFromComposer(modelId: string): Promise<void> {
+	composerMenuOpen = null;
+	requestRender();
+	await setModelSelection(modelId);
 }
 
 async function refreshActiveProfile(): Promise<void> {
@@ -392,74 +584,8 @@ async function createProviderProfile(): Promise<void> {
 			baseUrl: "",
 			apiKey: "",
 		};
-		setStatus("已创建 Provider，并同步到 CLI 共享数据目录。");
+		setStatus("已创建 Provider，并同步到 CLI 共享目录。");
 	});
-}
-
-function renderWorkspaceLauncher(): TemplateResult {
-	const frameClass = windowState.isMaximized ? "app-frame app-frame--maximized" : "app-frame";
-	return html`
-		<div class=${frameClass}>
-			<div class="launcher">
-				<div class="launcher__windowbar">
-					<div class="launcher__windowbar-title">WEPS Desktop</div>
-					${renderWindowControls()}
-				</div>
-				<div class="launcher__halo launcher__halo--left"></div>
-				<div class="launcher__halo launcher__halo--right"></div>
-				<section class="launcher__panel">
-					<div class="launcher__copy">
-						<p class="launcher__eyebrow">WEPS Desktop</p>
-						<h1 class="launcher__title">从工作区进入，再把 CLI 数据继续用起来。</h1>
-						<p class="launcher__text">
-							桌面端保持和 wepscli 的 Provider、会话元数据互通，只把界面整理成更适合日常使用的桌面工作台。
-						</p>
-						<div class="launcher__chips">
-							<span class="pill is-ready">共享 Provider</span>
-							<span class="pill is-ready">共享 Sessions</span>
-							<span class="pill is-muted">Electron Desktop</span>
-						</div>
-						<div class="launcher__actions">
-							<button class="button button--primary" ?disabled=${isBusy} @click=${() => void chooseWorkspace()}>
-								打开工作区
-							</button>
-						</div>
-					</div>
-
-					<div class="launcher__rail">
-						<section class="panel-card">
-							<div class="section-head">
-								<h2>最近使用</h2>
-								<span>${snapshot?.recentWorkspaces.length ?? 0}</span>
-							</div>
-							${
-								snapshot && snapshot.recentWorkspaces.length > 0
-									? html`
-											<div class="launcher__recent-list">
-												${snapshot.recentWorkspaces.map(
-													(workspacePath) => html`
-														<button
-															class="recent-workspace"
-															?disabled=${isBusy}
-															@click=${() => {
-																void activateWorkspace(workspacePath);
-															}}
-														>
-															<span class="recent-workspace__title">${basenamePath(workspacePath)}</span>
-															<span class="recent-workspace__path">${truncate(workspacePath, 84)}</span>
-														</button>
-													`,
-												)}
-											</div>
-										`
-									: html`<p class="panel-card__empty">还没有工作区记录。选择一个项目目录后，这里会出现快捷入口。</p>`
-							}
-						</section>
-					</div>
-				</section>
-			</div>
-		</div>
-	`;
 }
 
 function renderWindowControls(): TemplateResult {
@@ -478,98 +604,268 @@ function renderWindowControls(): TemplateResult {
 	`;
 }
 
-function renderSidebar(): TemplateResult {
-	const currentWorkspacePath = snapshot?.currentWorkspacePath;
+function renderTopbar(): TemplateResult {
+	const title = activeSessionRecord()?.title || basenamePath(snapshot?.currentWorkspacePath);
 	return html`
-		<aside class="shell-sidebar">
-			<div class="shell-sidebar__top">
-				<div class="brand-lockup">
-					<p class="brand-lockup__eyebrow">WEPS Desktop</p>
-					<h2 class="brand-lockup__title">${basenamePath(currentWorkspacePath)}</h2>
-					<p class="brand-lockup__text">延续 CLI 数据层，改成更安静的桌面工作台。</p>
+		<header class="topbar">
+			<div class="topbar__drag">
+				<div class="topbar__left">
+					<button class="icon-button" ?disabled=${isBusy} @click=${() => toggleSidebar()} aria-label="切换侧栏">
+						<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+							<path stroke-linecap="round" stroke-linejoin="round" d="M3.75 5.75h16.5M3.75 12h16.5M3.75 18.25h10.5" />
+						</svg>
+					</button>
+					<span class="topbar__app">WEPS</span>
 				</div>
-
-				<div class="workspace-summary__path">${currentWorkspacePath ?? "尚未选择工作区"}</div>
-
-				<div class="sidebar-actions">
-					<button class="button button--primary" ?disabled=${isBusy} @click=${() => void createSession()}>
-						新建会话
-					</button>
-					<button class="button button--subtle" ?disabled=${isBusy} @click=${() => openDetails()}>
-						设置
-					</button>
+				<div class="topbar__title">
+					<span class="topbar__eyebrow">Shared with WEPS CLI</span>
+					<strong>${truncate(title, 48)}</strong>
 				</div>
 			</div>
 
-			<div class="sidebar-section">
-				<div class="section-head">
-					<h3>会话</h3>
-					<span>${snapshot?.sessions.length ?? 0}</span>
-				</div>
+			<div class="topbar__actions">
+				${renderWindowControls()}
+			</div>
+		</header>
+	`;
+}
 
-				<div class="session-list">
-					${
-						snapshot && snapshot.sessions.length > 0
-							? snapshot.sessions.map((session) => renderSessionRow(session))
-							: html`<p class="panel-card__empty">当前工作区还没有会话，点击上方按钮即可开始。</p>`
-					}
+function renderLauncherTopbar(): TemplateResult {
+	return html`
+		<header class="topbar topbar--launcher">
+			<div class="topbar__drag">
+				<div class="topbar__left">
+					<span class="topbar__app">WEPS Desktop</span>
 				</div>
+			</div>
+			<div class="topbar__actions">${renderWindowControls()}</div>
+		</header>
+	`;
+}
+
+function renderLoadingState(): TemplateResult {
+	return html`
+		<div class="launcher-shell">
+			${renderLauncherTopbar()}
+			<div class="launcher-body launcher-body--loading">
+				<div class="loading-panel">
+					<div class="loading-panel__spinner"></div>
+					<div class="loading-panel__copy">
+						<p class="eyebrow">WEPS Desktop</p>
+						<h1>正在加载桌面工作台...</h1>
+						<p>读取共享的 Provider、Session 和工作区索引。</p>
+					</div>
+				</div>
+			</div>
+		</div>
+	`;
+}
+
+function renderWorkspaceLauncher(): TemplateResult {
+	const recentWorkspaces = snapshot?.recentWorkspaces ?? [];
+	return html`
+		<div class="launcher-shell">
+			${renderLauncherTopbar()}
+			<div class="launcher-body">
+				<section class="launcher-hero">
+					<div class="launcher-hero__glow launcher-hero__glow--primary"></div>
+					<div class="launcher-hero__glow launcher-hero__glow--secondary"></div>
+					<div class="launcher-hero__content">
+						<p class="eyebrow">WEPS Desktop</p>
+						<h1>继续你的 CLI 工作流，换一种更顺手的桌面交互。</h1>
+						<p>
+							桌面端不会重造数据层，只把会话、Provider 和工作区切换整理成更接近日常应用的窗口体验。
+						</p>
+						<div class="launcher-hero__actions">
+							<button class="button button--primary" ?disabled=${isBusy} @click=${() => void chooseWorkspace()}>
+								打开工作区
+							</button>
+						</div>
+					</div>
+				</section>
+
+				<aside class="launcher-aside">
+					<section class="panel-card">
+						<div class="section-head">
+							<h2>共享状态</h2>
+							<span>CLI</span>
+						</div>
+						<div class="metric-grid">
+							<div class="metric">
+								<span>Provider</span>
+								<strong>${snapshot?.providerProfiles.length ?? 0}</strong>
+							</div>
+							<div class="metric">
+								<span>会话</span>
+								<strong>${snapshot?.sessions.length ?? 0}</strong>
+							</div>
+						</div>
+					</section>
+
+					<section class="panel-card">
+						<div class="section-head">
+							<h2>最近工作区</h2>
+							<span>${recentWorkspaces.length}</span>
+						</div>
+						<div class="compact-list">
+							${recentWorkspaces.length > 0
+								? recentWorkspaces.map(
+										(workspacePath) => html`
+											<button
+												class="compact-list__item"
+												?disabled=${isBusy}
+												@click=${() => {
+													void activateWorkspace(workspacePath);
+												}}
+											>
+												<strong>${basenamePath(workspacePath)}</strong>
+												<small>${truncate(workspacePath, 72)}</small>
+											</button>
+										`,
+									)
+								: html`<p class="panel-empty">还没有工作区记录。选择一个目录后，这里会出现快捷入口。</p>`}
+						</div>
+					</section>
+				</aside>
+			</div>
+		</div>
+	`;
+}
+
+function renderSidebar(): TemplateResult {
+	const currentWorkspacePath = snapshot?.currentWorkspacePath;
+	const profile = activeProfile();
+	return html`
+		<aside class="sidebar">
+			<div class="sidebar__section sidebar__section--workspace">
+				<div class="sidebar-brand">
+					<div class="sidebar-brand__mark">W</div>
+					<div class="sidebar-brand__copy">
+						<strong>WEPS Desktop</strong>
+						<small>${basenamePath(currentWorkspacePath)}</small>
+					</div>
+				</div>
+				<div class="sidebar__meta-line">
+					<span>${profile?.label ?? "未配置 Provider"}</span>
+					<span>${snapshot?.sessions.length ?? 0} 个线程</span>
+				</div>
+				<button class="button button--subtle button--full" ?disabled=${isBusy} @click=${() => void createSession()}>
+					新建线程
+				</button>
+			</div>
+
+			<div class="sidebar__section sidebar__section--sessions">
+				<div class="section-head">
+					<h3>线程</h3>
+					<span>${basenamePath(currentWorkspacePath)}</span>
+				</div>
+				<div class="session-nav">
+					${snapshot && snapshot.sessions.length > 0
+						? snapshot.sessions.map((session) => renderSessionNavItem(session))
+						: html`<p class="panel-empty">当前工作区还没有线程，先新建一个或直接在底部输入。</p>`}
+				</div>
+			</div>
+
+			<div class="sidebar__section sidebar__section--footer">
+				<button class="button button--subtle button--full" ?disabled=${isBusy} @click=${() => openWorkspaceSwitcher()}>
+					切换工作区
+				</button>
+				<button class="button button--subtle button--full" ?disabled=${isBusy} @click=${() => openDetails()}>
+					打开设置
+				</button>
 			</div>
 		</aside>
 	`;
 }
 
-function renderSessionRow(session: DesktopSessionRecord): TemplateResult {
+function renderSessionNavItem(session: DesktopSessionRecord): TemplateResult {
 	const isActive = activeSessionRecord()?.id === session.id;
 	return html`
-		<button
-			class="session-row ${isActive ? "session-row--active" : ""}"
-			?disabled=${isBusy}
+		<div
+			class="session-nav__item ${isActive ? "session-nav__item--active" : ""}"
+			role="button"
+			tabindex=${isBusy ? -1 : 0}
 			@click=${() => {
+				if (isBusy) {
+					return;
+				}
 				void openSession(session.id);
 			}}
+			@keydown=${(event: KeyboardEvent) => {
+				if (isBusy) {
+					return;
+				}
+				if (event.key === "Enter" || event.key === " ") {
+					event.preventDefault();
+					void openSession(session.id);
+				}
+			}}
 		>
-			<div class="session-row__topline">
-				<span class="session-row__title">${truncate(session.title || "未命名会话", 38)}</span>
-				<span class="session-row__state">${sessionStateLabel(session)}</span>
+			<div class="session-nav__content">
+				<div class="session-nav__titleline">
+					<span class="session-nav__title">${truncate(session.title || "未命名线程", 30)}</span>
+					<div class="session-nav__actions">
+						<time>${formatRelativeTime(session.updatedAt)}</time>
+						<button
+							class="session-nav__action"
+							title="归档线程"
+							aria-label="归档线程"
+							?disabled=${isBusy}
+							@click=${(event: Event) => {
+								event.stopPropagation();
+								void archiveSession(session.id);
+							}}
+						>
+							<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">
+								<path stroke-linecap="round" stroke-linejoin="round" d="M4 7.5h16M6.5 7.5v9.75A1.75 1.75 0 008.25 19h7.5a1.75 1.75 0 001.75-1.75V7.5M9.5 11.5h5" />
+								<path stroke-linecap="round" stroke-linejoin="round" d="M9 4.5h6" />
+							</svg>
+						</button>
+						<button
+							class="session-nav__action session-nav__action--danger"
+							title="删除线程"
+							aria-label="删除线程"
+							?disabled=${isBusy}
+							@click=${(event: Event) => {
+								event.stopPropagation();
+								void deleteSession(session.id);
+							}}
+						>
+							<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">
+								<path stroke-linecap="round" stroke-linejoin="round" d="M5 7.5h14M9.5 7.5V5.75A.75.75 0 0110.25 5h3.5a.75.75 0 01.75.75V7.5M8 7.5v10.25A1.25 1.25 0 009.25 19h5.5A1.25 1.25 0 0016 17.75V7.5" />
+								<path stroke-linecap="round" stroke-linejoin="round" d="M10 11v4.5M14 11v4.5" />
+							</svg>
+						</button>
+					</div>
+				</div>
+				<div class="session-nav__summary">${truncate(session.lastPrompt || session.summary || "等待新的任务。", 56)}</div>
+				<div class="session-nav__meta">
+					<span>${sessionStateLabel(session)}</span>
+					<span>${session.providerLabel ?? activeProfile()?.label ?? "未选 Provider"}</span>
+				</div>
 			</div>
-			<div class="session-row__summary">${truncate(session.summary || "等待新任务。", 92)}</div>
-			<div class="session-row__meta">
-				<span>${session.providerLabel ?? "未选 Provider"}</span>
-				<span>${formatRelativeTime(session.updatedAt)}</span>
-			</div>
-		</button>
+		</div>
 	`;
 }
 
-function renderConversationHeader(): TemplateResult {
-	const session = activeSessionRecord();
+function renderPaneHeader(): TemplateResult {
 	const runtimeState = activeRuntimeState();
-	const profile = activeProfile();
-	const modelName = activeModelName();
-
 	return html`
-		<header class="conversation-header conversation-header--hero">
-			<div class="conversation-header__copy">
-				<p class="conversation-header__eyebrow">${session ? "当前会话" : "工作区已就绪"}</p>
-				<h1 class="conversation-header__title">
-					${session ? truncate(session.title, 68) : "开始一个新的桌面会话"}
-				</h1>
-				<p class="conversation-header__text">
-					${session
-						? session.summary || "继续这个会话，数据会同步回共享的 CLI 会话目录。"
-						: "会话、Provider 和模型选择都沿用 CLI 共享数据；桌面端只负责把操作组织得更易用。"}
-				</p>
-				<div class="hero-meta">
-					<span class="pill ${runtimeTone(runtimeState?.phase)}">${runtimeState?.label ?? "未启动"}</span>
-					<span class="hero-meta__item">${profile?.label ?? "未配置 Provider"}</span>
-					<span class="hero-meta__item">${modelName ?? "未选择模型"}</span>
-				</div>
+		<header class="pane-toolbar">
+			<div class="pane-toolbar__primary">
+				<button class="pane-toolbar__selector" ?disabled=${isBusy} @click=${() => openDetails()}>
+					${activeModelName() ?? "选择模型"}
+				</button>
+				<span class="pane-toolbar__meta">${activeProfile()?.label ?? "未配置 Provider"}</span>
+				<span class="pane-toolbar__meta">${runtimeState?.label ?? "未启动"}</span>
 			</div>
 
-			<div class="conversation-header__actions">
-				<button class="button button--subtle" ?disabled=${isBusy} @click=${() => openDetails()}>
-					查看设置
+			<div class="pane-toolbar__actions">
+				<button class="button button--subtle button--small" ?disabled=${isBusy} @click=${() => void createSession()}>
+					新建
+				</button>
+				<button class="button button--subtle button--small" ?disabled=${isBusy} @click=${() => openDetails()}>
+					设置
 				</button>
 			</div>
 		</header>
@@ -579,54 +875,70 @@ function renderConversationHeader(): TemplateResult {
 function renderConversationEmptyState(): TemplateResult {
 	const hasProfiles = (snapshot?.providerProfiles.length ?? 0) > 0;
 	return html`
-		<div class="conversation-empty">
-			<h2>${hasProfiles ? "开始一个工作区对话" : "先配置一个 Provider"}</h2>
+		<div class="empty-state empty-state--hero">
+			<div class="empty-state__mark">W</div>
+			<p class="eyebrow">${hasProfiles ? "准备开始" : "需要一个 Provider"}</p>
+			<h2>${activeModelName() ?? "WEPS Desktop"}</h2>
 			<p>
 				${hasProfiles
-					? "点击“新建会话”或直接输入问题即可开始。桌面端会继续沿用 CLI 的共享 Provider 和 Session 元数据。"
-					: "当前还没有可用 Provider。打开右侧设置面板添加一个 OpenAI Compatible 或 Anthropic Compatible Provider。"}
+					? `开始构建 ${basenamePath(snapshot?.currentWorkspacePath)}，可以从左侧选择线程，或直接在底部输入新的任务。`
+					: "还没有可用的 Provider。打开设置后添加一个 OpenAI Compatible 或 Anthropic Compatible 配置。"}
 			</p>
-			<div class="conversation-empty__actions">
-				<button class="button button--primary" ?disabled=${isBusy} @click=${() => void createSession()}>
-					新建会话
-				</button>
-				<button class="button button--subtle" ?disabled=${isBusy} @click=${() => openDetails()}>
-					打开设置
-				</button>
+			<div class="empty-state__subline">
+				<span>${activeProfile()?.label ?? "未配置 Provider"}</span>
+				<span>${snapshot?.sessions.length ?? 0} 个线程</span>
 			</div>
 		</div>
 	`;
 }
 
-function renderTranscript(): TemplateResult {
+function renderTranscriptSurface(): TemplateResult {
 	const session = activeSession();
 	if (!session) {
-		return renderConversationEmptyState();
+		return html`<section class="conversation-surface conversation-surface--empty">${renderConversationEmptyState()}</section>`;
 	}
 
 	return html`
-		<div class="transcript">
-			${session.messages.length === 0
-				? html`
-						<div class="conversation-empty conversation-empty--compact">
-							<h2>会话已创建</h2>
-							<p>输入一个任务开始。首次发送后，runtime 会自动绑定到当前工作区。</p>
-						</div>
-					`
-				: session.messages.map((message) => renderMessage(message))}
-		</div>
+		<section class="conversation-surface ${session.messages.length === 0 ? "conversation-surface--empty" : ""}">
+			<div class="transcript">
+				${session.messages.length === 0
+					? html`
+							<div class="empty-state empty-state--compact">
+								<div class="empty-state__mark empty-state__mark--small">W</div>
+								<p class="eyebrow">线程已创建</p>
+								<h2>${truncate(session.record.title || "未命名线程", 40)}</h2>
+								<p>从底部输入框发出第一条任务，runtime 会自动绑定到当前工作区并继续写入共享会话目录。</p>
+							</div>
+						`
+					: session.messages.map((message) => renderMessage(message))}
+			</div>
+		</section>
 	`;
 }
 
 function renderMessage(message: DesktopChatMessage): TemplateResult {
-	const label = messageKindLabel(message);
+	const isUser = message.role === "user";
+	const bubbleTone = messageBubbleTone(message);
 	return html`
-		<article class="message-card message-card--${message.role} message-card--${message.kind ?? "default"}">
-			<header class="message-card__header">
-				<span class="message-card__label">${label}</span>
-				<span class="message-card__time">${message.time}</span>
-			</header>
-			<pre class="message-card__content">${message.content}</pre>
+		<article class="message-shell ${isUser ? "message-shell--user" : ""}">
+			<div class="message-shell__meta ${isUser ? "message-shell__meta--user" : ""}">
+				${isUser
+					? html`<span class="message-shell__time">${message.time}</span>`
+					: html`
+							<span class="message-avatar">${messageAvatarLabel(message)}</span>
+							<div class="message-shell__authoring">
+								<strong>${messageAuthorLabel(message)}</strong>
+								<span>${message.time}</span>
+							</div>
+						`}
+				${isUser ? html`<span class="message-avatar message-avatar--user">${messageAvatarLabel(message)}</span>` : html``}
+			</div>
+			<div class="message-bubble ${bubbleTone}">
+				${message.kind && message.kind !== "default"
+					? html`<div class="message-bubble__eyebrow">${messageKindLabel(message)}</div>`
+					: html``}
+				<pre class="message-bubble__content">${message.content}</pre>
+			</div>
 		</article>
 	`;
 }
@@ -642,12 +954,12 @@ function renderApprovalBanner(): TemplateResult {
 			<div class="approval-banner__header">
 				<div>
 					<p class="approval-banner__eyebrow">${request.riskLabel}</p>
-					<h2 class="approval-banner__title">${request.toolName}</h2>
+					<h2>${request.toolName}</h2>
 				</div>
-				<span class="approval-banner__summary">${truncate(request.summary, 80)}</span>
+				<span>${truncate(request.summary, 96)}</span>
 			</div>
 			<p class="approval-banner__text">${request.reason}</p>
-			<pre class="approval-banner__content">${request.argsText}</pre>
+			<pre class="approval-banner__content">${request.commandText ?? request.argsText}</pre>
 			<div class="approval-banner__actions">
 				<button class="button button--primary" ?disabled=${isBusy} @click=${() => void resolveApproval("allow")}>
 					允许
@@ -663,21 +975,100 @@ function renderApprovalBanner(): TemplateResult {
 	`;
 }
 
+function renderProviderMenu(): TemplateResult {
+	const profiles = snapshot?.providerProfiles ?? [];
+	if (profiles.length === 0) {
+		return html`
+			<div class="floating-menu">
+				<div class="floating-menu__header">
+					<strong>Provider</strong>
+					<span>未配置</span>
+				</div>
+				<p class="floating-menu__empty">先在设置里添加一个 Provider。</p>
+			</div>
+		`;
+	}
+
+	return html`
+		<div class="floating-menu">
+			<div class="floating-menu__header">
+				<strong>切换 Provider</strong>
+				<span>${profiles.length} 个配置</span>
+			</div>
+			<div class="floating-menu__list">
+				${profiles.map(
+					(profile) => html`
+						<button
+							class="floating-menu__item ${snapshot?.activeSelection.profileId === profile.id ? "floating-menu__item--active" : ""}"
+							?disabled=${isBusy}
+							@click=${() => {
+								void selectProfileFromComposer(profile.id);
+							}}
+						>
+							<div>
+								<strong>${profile.label}</strong>
+								<small>${profile.family}</small>
+							</div>
+							<span class="pill pill--tiny ${providerValidationTone(profile)}">${providerValidationLabel(profile)}</span>
+						</button>
+					`,
+				)}
+			</div>
+		</div>
+	`;
+}
+
+function renderModelMenu(): TemplateResult {
+	const profile = activeProfile();
+	const models = profile?.models ?? [];
+	if (!profile || models.length === 0) {
+		return html`
+			<div class="floating-menu">
+				<div class="floating-menu__header">
+					<strong>切换模型</strong>
+					<span>不可用</span>
+				</div>
+				<p class="floating-menu__empty">先选择一个可用 Provider，然后刷新模型列表。</p>
+			</div>
+		`;
+	}
+
+	return html`
+		<div class="floating-menu">
+			<div class="floating-menu__header">
+				<strong>切换模型</strong>
+				<span>${profile.label}</span>
+			</div>
+			<div class="floating-menu__list">
+				${models.map(
+					(model) => html`
+						<button
+							class="floating-menu__item ${snapshot?.activeSelection.modelId === model.id ? "floating-menu__item--active" : ""}"
+							?disabled=${isBusy}
+							@click=${() => {
+								void selectModelFromComposer(model.id);
+							}}
+						>
+							<div>
+								<strong>${model.name}</strong>
+								<small>${model.id}</small>
+							</div>
+						</button>
+					`,
+				)}
+			</div>
+		</div>
+	`;
+}
+
 function renderComposer(): TemplateResult {
 	const runtimeState = activeRuntimeState();
-	const profile = activeProfile();
 	const canAbort = Boolean(runtimeState?.interruptible);
 	return html`
-		<div class="composer-panel">
-			<div class="composer-panel__status">
-				<span class="pill ${runtimeTone(runtimeState?.phase)}">${runtimeState?.label ?? "未启动 runtime"}</span>
-				${runtimeState?.detail ? html`<span class="composer-panel__detail">${runtimeState.detail}</span>` : html``}
-				${profile ? html`<span class="composer-panel__detail">Provider：${profile.label}</span>` : html``}
-			</div>
-
+		<section class="composer">
 			<textarea
-				class="composer-panel__input"
-				placeholder="描述你想在当前工作区里完成的事情。支持 Ctrl+Enter 快速发送。"
+				class="composer__input"
+				placeholder="描述你希望在当前工作区里完成的任务。"
 				.value=${composerValue}
 				@input=${(event: Event) => {
 					composerValue = (event.target as HTMLTextAreaElement).value;
@@ -690,28 +1081,215 @@ function renderComposer(): TemplateResult {
 				}}
 			></textarea>
 
-			<div class="composer-panel__footer">
-				<p class="composer-panel__hint">Provider 和 Session 会持续写回 CLI 的共享目录。</p>
-				<div class="composer-panel__actions">
-					<button class="button button--primary" ?disabled=${isBusy} @click=${() => void sendPrompt()}>
-						发送
-					</button>
+			<div class="composer__footer">
+				<div class="composer__meta">
+					<div class="composer__menu-anchor">
+						<button class="composer__chip" ?disabled=${isBusy} @click=${() => toggleComposerMenu("model")}>
+							${activeModelName() ?? "未选择模型"}
+						</button>
+						${composerMenuOpen === "model" ? renderModelMenu() : html``}
+					</div>
+					<div class="composer__menu-anchor">
+						<button class="composer__chip" ?disabled=${isBusy} @click=${() => toggleComposerMenu("provider")}>
+							${activeProfile()?.label ?? "未配置 Provider"}
+						</button>
+						${composerMenuOpen === "provider" ? renderProviderMenu() : html``}
+					</div>
+					<span class="composer__caption">${runtimeState?.detail ?? runtimeState?.label ?? "未启动 runtime"}</span>
+				</div>
+				<div class="composer__actions">
 					<button class="button button--subtle" ?disabled=${isBusy || !canAbort} @click=${() => void abortSession()}>
 						中断
 					</button>
+					<button class="button button--primary" ?disabled=${isBusy} @click=${() => void sendPrompt()}>
+						发送
+					</button>
 				</div>
 			</div>
-		</div>
+			${composerMenuOpen
+				? html`<button class="floating-menu-backdrop" aria-label="关闭菜单" @click=${() => closeComposerMenu()}></button>`
+				: html``}
+		</section>
 	`;
 }
 
-function renderMainArea(): TemplateResult {
+function renderSessionOverviewRailCard(): TemplateResult {
+	const session = activeSessionRecord();
+	const runtimeState = activeRuntimeState();
 	return html`
-		<section class="conversation-shell">
-			${renderConversationHeader()}
-			<div class="main-stage">
-				${renderApprovalBanner()} ${renderTranscript()} ${renderComposer()}
+		<section class="rail-card rail-card--accent">
+			<p class="eyebrow">${session ? "当前会话" : "工作区状态"}</p>
+			<h2>${session ? truncate(session.title || "未命名会话", 44) : basenamePath(snapshot?.currentWorkspacePath)}</h2>
+			<p class="rail-card__text">${session ? sessionSummaryText() : "先从一个提示词或新建会话开始。"}</p>
+
+			<div class="metric-grid">
+				<div class="metric">
+					<span>状态</span>
+					<strong>${runtimeState?.label ?? "未启动"}</strong>
+				</div>
+				<div class="metric">
+					<span>消息</span>
+					<strong>${activeMessageCount()}</strong>
+				</div>
+				<div class="metric">
+					<span>更新</span>
+					<strong>${formatRelativeTime(session?.updatedAt)}</strong>
+				</div>
+				<div class="metric">
+					<span>工作区</span>
+					<strong>${basenamePath(snapshot?.currentWorkspacePath)}</strong>
+				</div>
 			</div>
+
+			<div class="detail-list">
+				<div class="detail-list__row">
+					<span>Provider</span>
+					<span>${session?.providerLabel ?? activeProfile()?.label ?? "未配置"}</span>
+				</div>
+				<div class="detail-list__row">
+					<span>模型</span>
+					<span>${session?.modelId ?? activeModelName() ?? "未选择"}</span>
+				</div>
+				<div class="detail-list__row">
+					<span>创建于</span>
+					<span>${formatTimestamp(session?.createdAt)}</span>
+				</div>
+			</div>
+
+			<div class="rail-card__actions">
+				<button class="button button--primary" ?disabled=${isBusy} @click=${() => void createSession()}>
+					新建会话
+				</button>
+				<button class="button button--subtle" ?disabled=${isBusy} @click=${() => openDetails()}>
+					更多设置
+				</button>
+			</div>
+		</section>
+	`;
+}
+
+function renderInlineProviderCard(): TemplateResult {
+	const profile = activeProfile();
+	const profiles = snapshot?.providerProfiles ?? [];
+	return html`
+		<section class="rail-card">
+			<div class="section-head">
+				<h3>Provider</h3>
+				<button class="button button--subtle button--small" ?disabled=${isBusy || !profile} @click=${() => void refreshActiveProfile()}>
+					刷新模型
+				</button>
+			</div>
+
+			${profiles.length > 0
+				? html`
+						<div class="form-grid form-grid--stack">
+							<label class="field-label">
+								<span>当前 Provider</span>
+								<select
+									class="field-input"
+									?disabled=${isBusy}
+									@change=${(event: Event) => {
+										const target = event.target as HTMLSelectElement;
+										void setProfileSelection(target.value);
+									}}
+								>
+									${profiles.map(
+										(entry) => html`
+											<option value=${entry.id} ?selected=${snapshot?.activeSelection.profileId === entry.id}>
+												${entry.label}
+											</option>
+										`,
+									)}
+								</select>
+							</label>
+
+							<label class="field-label">
+								<span>当前模型</span>
+								<select
+									class="field-input"
+									?disabled=${isBusy || !profile || profile.models.length === 0}
+									@change=${(event: Event) => {
+										const target = event.target as HTMLSelectElement;
+										void setModelSelection(target.value);
+									}}
+								>
+									${profile?.models.map(
+										(model) => html`
+											<option value=${model.id} ?selected=${snapshot?.activeSelection.modelId === model.id}>
+												${model.name}
+											</option>
+										`,
+									)}
+								</select>
+							</label>
+						</div>
+						<div class="rail-note">
+							<span class="pill pill--tiny ${profile ? providerValidationTone(profile) : "is-muted"}">
+								${profile ? providerValidationLabel(profile) : "未校验"}
+							</span>
+							<span>${profile?.lastValidationMessage ?? "同步自 CLI 的共享 Provider 配置。"}</span>
+						</div>
+					`
+				: html`
+						<p class="panel-empty">还没有可用 Provider。打开设置后创建一个配置。</p>
+						<button class="button button--subtle button--full" ?disabled=${isBusy} @click=${() => openDetails()}>
+							去设置里添加
+						</button>
+					`}
+		</section>
+	`;
+}
+
+function renderRecentSessionsRailCard(): TemplateResult {
+	const recentSessions = otherSessions(5);
+	return html`
+		<section class="rail-card">
+			<div class="section-head">
+				<h3>最近会话</h3>
+				<span>${snapshot?.sessions.length ?? 0}</span>
+			</div>
+			<div class="compact-list">
+				${recentSessions.length > 0
+					? recentSessions.map(
+							(session) => html`
+								<button
+									class="compact-list__item compact-list__item--session"
+									?disabled=${isBusy}
+									@click=${() => {
+										void openSession(session.id);
+									}}
+								>
+									<strong>${truncate(session.title || "未命名会话", 36)}</strong>
+									<small>${truncate(session.summary || "等待新的任务。", 78)}</small>
+									<span class="compact-list__meta">
+										<span>${session.providerLabel ?? "未选 Provider"}</span>
+										<span>${formatRelativeTime(session.updatedAt)}</span>
+									</span>
+								</button>
+							`,
+						)
+					: html`<p class="panel-empty">会话历史接通后，这里会展示可快速切换的上下文。</p>`}
+			</div>
+		</section>
+	`;
+}
+
+function renderSessionRail(): TemplateResult {
+	return html`
+		<aside class="session-rail">
+			${renderSessionOverviewRailCard()} ${renderInlineProviderCard()} ${renderRecentSessionsRailCard()}
+		</aside>
+	`;
+}
+
+function renderWorkspacePane(): TemplateResult {
+	return html`
+		<section class="workspace-pane">
+			${renderPaneHeader()}
+			<div class="workspace-pane__stage">
+				${renderApprovalBanner()} ${renderTranscriptSurface()}
+			</div>
+			<div class="workspace-pane__composer">${renderComposer()}</div>
 		</section>
 	`;
 }
@@ -727,16 +1305,16 @@ function renderContextCard(): TemplateResult {
 				<span class="field-block__label">当前工作区</span>
 				<div class="field-code">${snapshot?.currentWorkspacePath ?? "未选择"}</div>
 			</div>
-			<div class="field-grid">
-				<div class="field-grid__row">
+			<div class="detail-list">
+				<div class="detail-list__row">
 					<span>Agent Dir</span>
 					<span>${truncate(snapshot?.agentDir ?? "Unavailable", 34)}</span>
 				</div>
-				<div class="field-grid__row">
-					<span>App</span>
+				<div class="detail-list__row">
+					<span>应用</span>
 					<span>${snapshot?.appContext.appName ?? "WEPS Desktop"}</span>
 				</div>
-				<div class="field-grid__row">
+				<div class="detail-list__row">
 					<span>平台</span>
 					<span>${snapshot?.appContext.platform ?? "unknown"}</span>
 				</div>
@@ -820,7 +1398,7 @@ function renderProviderCard(): TemplateResult {
 								</button>
 							`,
 						)
-					: html`<p class="panel-card__empty">还没有 Provider。下方创建后会自动写入 CLI 共享目录。</p>`}
+					: html`<p class="panel-empty">还没有 Provider。下方创建后会自动写入 CLI 共享目录。</p>`}
 			</div>
 		</section>
 	`;
@@ -922,14 +1500,80 @@ function renderRecentWorkspacesCard(): TemplateResult {
 										void activateWorkspace(workspacePath);
 									}}
 								>
-									<span>${basenamePath(workspacePath)}</span>
-									<small>${truncate(workspacePath, 60)}</small>
+									<strong>${basenamePath(workspacePath)}</strong>
+									<small>${truncate(workspacePath, 72)}</small>
 								</button>
 							`,
 						)
-					: html`<p class="panel-card__empty">暂无最近工作区记录。</p>`}
+					: html`<p class="panel-empty">暂无最近工作区记录。</p>`}
 			</div>
 		</section>
+	`;
+}
+
+function renderWorkspaceSwitcherOverlay(): TemplateResult {
+	if (!workspaceSwitcherOpen) {
+		return html``;
+	}
+
+	const workspaces = workspaceSummaries();
+	return html`
+		<div class="settings-overlay settings-overlay--light" @click=${() => closeWorkspaceSwitcher()}>
+			<section class="workspace-switcher" @click=${(event: Event) => event.stopPropagation()}>
+				<header class="workspace-switcher__header">
+					<div>
+						<p class="eyebrow">切换工作区</p>
+						<h2>选择已接入目录</h2>
+					</div>
+					<button class="button button--subtle button--small" @click=${() => closeWorkspaceSwitcher()}>关闭</button>
+				</header>
+
+				<div class="workspace-switcher__list">
+					${workspaces.length > 0
+						? workspaces.map(
+								(workspace) => html`
+									<button
+										class="workspace-row ${workspace.isCurrent ? "workspace-row--active" : ""}"
+										?disabled=${isBusy || workspace.isCurrent}
+										@click=${() => {
+											void activateWorkspaceFromSwitcher(workspace.path);
+										}}
+									>
+										<div class="workspace-row__copy">
+											<div class="workspace-row__titleline">
+												<strong>${workspace.name}</strong>
+												${workspace.isCurrent ? html`<span class="pill pill--tiny is-ready">当前</span>` : html``}
+											</div>
+											<small>${truncate(workspace.path, 84)}</small>
+											<div class="workspace-row__meta">
+												<span>${workspace.sessionCount} 个线程</span>
+												<span>${workspace.providerLabel ?? "未记录 Provider"}</span>
+												<span>${workspace.lastUpdated ? formatRelativeTime(workspace.lastUpdated) : "暂无会话"}</span>
+											</div>
+											${workspace.lastTitle
+												? html`<p class="workspace-row__hint">${truncate(workspace.lastTitle, 56)}</p>`
+												: html``}
+										</div>
+									</button>
+								`,
+							)
+						: html`<p class="panel-empty">还没有已接入的工作区，先创建或选择一个文件夹。</p>`}
+				</div>
+
+				<div class="workspace-switcher__actions">
+					${snapshot?.currentWorkspacePath
+						? html`
+								<button class="button button--subtle" ?disabled=${isBusy} @click=${() => void closeCurrentWorkspace()}>
+									关闭当前工作区
+								</button>
+							`
+						: html``}
+					<button class="button button--primary" ?disabled=${isBusy} @click=${() => void chooseWorkspaceFromSwitcher()}>
+						创建或打开新工作区
+					</button>
+				</div>
+			</section>
+		</div>
 	`;
 }
 
@@ -940,17 +1584,17 @@ function renderDetailsOverlay(): TemplateResult {
 	}
 
 	return html`
-		<div class="overlay" @click=${() => closeDetails()}>
-			<section class="drawer" @click=${(event: Event) => event.stopPropagation()}>
-				<header class="drawer__header">
+		<div class="settings-overlay" @click=${() => closeDetails()}>
+			<section class="settings-sheet" @click=${(event: Event) => event.stopPropagation()}>
+				<header class="settings-sheet__header">
 					<div>
-						<p class="drawer__eyebrow">Workspace Settings</p>
-						<h2 class="drawer__title">${basenamePath(currentWorkspacePath)}</h2>
+						<p class="eyebrow">Workspace Settings</p>
+						<h2>${basenamePath(currentWorkspacePath)}</h2>
 					</div>
 					<button class="button button--subtle button--small" @click=${() => closeDetails()}>关闭</button>
 				</header>
 
-				<div class="drawer__grid">
+				<div class="settings-sheet__grid">
 					${renderContextCard()} ${renderProviderCard()} ${renderCreateProviderCard()} ${renderRecentWorkspacesCard()}
 				</div>
 			</section>
@@ -960,14 +1604,17 @@ function renderDetailsOverlay(): TemplateResult {
 
 function renderStatusBar(): TemplateResult {
 	const runtimeState = activeRuntimeState();
-	const profile = activeProfile();
 	return html`
 		<footer class="statusbar">
 			<span class="statusbar__brand">WEPS Desktop</span>
-			<span class="pill pill--tiny ${runtimeTone(runtimeState?.phase)}">${runtimeState?.label ?? "未启动"}</span>
-			<span class="statusbar__item">${profile?.label ?? "未配置 Provider"}</span>
-			<span class="statusbar__spacer"></span>
+			<div class="statusbar__pill">
+				<span class="statusbar__dot ${runtimeTone(runtimeState?.phase)}"></span>
+				<span>${runtimeState?.label ?? "未启动"}</span>
+			</div>
+			<span class="statusbar__item">${activeProfile()?.label ?? "未配置 Provider"}</span>
 			<span class="statusbar__item">${activeModelName() ?? "未选择模型"}</span>
+			<span class="statusbar__spacer"></span>
+			<span class="statusbar__item">${basenamePath(snapshot?.currentWorkspacePath)}</span>
 			<span class="statusbar__item">${snapshot?.sessions.length ?? 0} 个会话</span>
 			<span class="statusbar__item">v${snapshot?.appContext.appVersion ?? "0.1.0"}</span>
 		</footer>
@@ -975,77 +1622,38 @@ function renderStatusBar(): TemplateResult {
 }
 
 function renderWorkspaceShell(): TemplateResult {
-	const shellClass = sidebarOpen
-		? "desktop-shell"
-		: "desktop-shell desktop-shell--sidebar-hidden";
-	const frameClass = windowState.isMaximized ? "app-frame app-frame--maximized" : "app-frame";
-	const title = activeSessionRecord()?.title ?? basenamePath(snapshot?.currentWorkspacePath);
+	const shellClass = sidebarOpen ? "desktop-shell" : "desktop-shell desktop-shell--sidebar-hidden";
 	return html`
-		<div class=${frameClass}>
-			<div class=${shellClass}>
-				<header class="topbar">
-					<div class="topbar__drag">
-						<div class="topbar__left">
-							<button class="icon-button" ?disabled=${isBusy} @click=${() => toggleSidebar()} aria-label="切换侧栏">
-								<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-									<path stroke-linecap="round" stroke-linejoin="round" d="M4 5.5h16M4 12h16M4 18.5h10" />
-								</svg>
-							</button>
-							<span class="topbar__app">WEPS</span>
-						</div>
-						<div class="topbar__title">
-							<span class="topbar__eyebrow">Shared with WEPS CLI</span>
-							<strong>${truncate(title, 42)}</strong>
-						</div>
-					</div>
-
-					<div class="topbar__actions">
-						<button class="button button--subtle button--small" ?disabled=${isBusy} @click=${() => void chooseWorkspace()}>
-							切换工作区
-						</button>
-						<button class="button button--subtle button--small" ?disabled=${isBusy} @click=${() => openDetails()}>
-							设置
-						</button>
-						${renderWindowControls()}
-					</div>
-				</header>
-
-				<div class="shell-body">
-					${sidebarOpen ? renderSidebar() : html``}
-					${renderMainArea()}
-				</div>
-
-				${renderStatusBar()} ${renderDetailsOverlay()}
+		<div class=${shellClass}>
+			${renderTopbar()}
+			<div class="shell-body">
+				${sidebarOpen ? renderSidebar() : html``}
+				${renderWorkspacePane()}
 			</div>
+			${renderWorkspaceSwitcherOverlay()} ${renderDetailsOverlay()}
 		</div>
 	`;
 }
 
+function renderRootContent(): TemplateResult {
+	if (!snapshot) {
+		return renderLoadingState();
+	}
+	if (!snapshot.currentWorkspacePath) {
+		return renderWorkspaceLauncher();
+	}
+	return renderWorkspaceShell();
+}
+
 function renderApp(): void {
 	const root = getRoot();
+	const frameClass = windowState.isMaximized ? "app-frame app-frame--maximized" : "app-frame";
 	render(
 		html`
-			${
-				!snapshot
-					? html`
-							<div class=${windowState.isMaximized ? "app-frame app-frame--maximized" : "app-frame"}>
-								<div class="launcher">
-									<div class="launcher__windowbar">
-										<div class="launcher__windowbar-title">WEPS Desktop</div>
-										${renderWindowControls()}
-									</div>
-									<section class="launcher__panel launcher__panel--loading">
-										<p class="launcher__eyebrow">WEPS Desktop</p>
-										<h1 class="launcher__title">正在加载桌面工作台...</h1>
-									</section>
-								</div>
-							</div>
-						`
-					: !snapshot.currentWorkspacePath
-						? renderWorkspaceLauncher()
-						: renderWorkspaceShell()
-			}
-			${statusMessage ? html`<div class="toast">${statusMessage}</div>` : html``}
+			<div class=${frameClass}>
+				${renderRootContent()}
+				${statusMessage ? html`<div class="toast">${statusMessage}</div>` : html``}
+			</div>
 		`,
 		root,
 	);

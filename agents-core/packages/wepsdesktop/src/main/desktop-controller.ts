@@ -263,6 +263,7 @@ export class DesktopController {
 	private readonly profileService = new ProviderProfileService();
 	private readonly sessionService = new SessionHistoryService();
 	private readonly workspaceStore: WorkspaceStore;
+	private readonly unsubscribeSessionHistory: () => void;
 	private currentWorkspacePath?: string;
 	private activeSessionId?: string;
 	private runtimeClient?: RuntimeClient;
@@ -281,6 +282,9 @@ export class DesktopController {
 		this.runtimeState = this.currentWorkspacePath
 			? this.computeUnavailableRuntimeState()
 			: toIdleRuntimeState("Choose a workspace");
+		this.unsubscribeSessionHistory = this.sessionService.subscribe(() => {
+			this.handleSessionHistoryChanged();
+		});
 	}
 
 	getSnapshot(): DesktopSnapshot {
@@ -366,6 +370,26 @@ export class DesktopController {
 		return this.buildSnapshot();
 	}
 
+	async archiveSession(sessionId: string): Promise<DesktopSnapshot> {
+		const archived = this.sessionService.archiveSession(sessionId);
+		if (!archived) {
+			throw new Error(`Unknown session: ${sessionId}`);
+		}
+
+		await this.handleSessionRemoved(sessionId);
+		return this.broadcastSnapshot();
+	}
+
+	async deleteSession(sessionId: string): Promise<DesktopSnapshot> {
+		const deleted = this.sessionService.deleteSession(sessionId);
+		if (!deleted) {
+			throw new Error(`Unknown session: ${sessionId}`);
+		}
+
+		await this.handleSessionRemoved(sessionId);
+		return this.broadcastSnapshot();
+	}
+
 	async openSession(sessionId: string): Promise<DesktopSnapshot> {
 		const record = this.sessionService.getSession(sessionId);
 		if (!record) {
@@ -422,8 +446,54 @@ export class DesktopController {
 		return this.buildSnapshot();
 	}
 
-	dispose(): void {
+	async closeWorkspace(): Promise<DesktopSnapshot> {
+		this.workspaceStore.clearCurrentWorkspace();
+		this.currentWorkspacePath = undefined;
+		this.activeSessionId = undefined;
+		this.messages = [];
 		this.disposeRuntimeClient();
+		this.runtimeState = toIdleRuntimeState("Choose a workspace");
+		return this.broadcastSnapshot();
+	}
+
+	dispose(): void {
+		this.unsubscribeSessionHistory();
+		this.disposeRuntimeClient();
+	}
+
+	private handleSessionHistoryChanged(): void {
+		if (this.activeSessionId && !this.sessionService.getSession(this.activeSessionId)) {
+			this.activeSessionId = undefined;
+			this.disposeRuntimeClient();
+			this.runtimeState = this.currentWorkspacePath
+				? this.computeUnavailableRuntimeState()
+				: toIdleRuntimeState("Choose a workspace");
+		}
+
+		this.broadcastSnapshot();
+	}
+
+	private async handleSessionRemoved(sessionId: string): Promise<void> {
+		if (this.activeSessionId !== sessionId) {
+			return;
+		}
+
+		this.disposeRuntimeClient();
+		this.activeSessionId = undefined;
+		this.messages = [];
+
+		if (!this.currentWorkspacePath) {
+			this.runtimeState = toIdleRuntimeState("Choose a workspace");
+			return;
+		}
+
+		const nextSession = this.sessionService.listSessions(this.currentWorkspacePath)[0];
+		if (nextSession) {
+			await this.openSession(nextSession.id);
+			return;
+		}
+
+		this.runtimeState = this.computeUnavailableRuntimeState();
 	}
 
 	private buildSnapshot(): DesktopSnapshot {

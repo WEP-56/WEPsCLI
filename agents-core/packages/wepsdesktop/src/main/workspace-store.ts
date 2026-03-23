@@ -57,4 +57,14 @@ export class WorkspaceStore {
 		this.save(nextState);
 		return nextState;
 	}
+
+	clearCurrentWorkspace(): WorkspaceStoreState {
+		const current = this.load();
+		const nextState: WorkspaceStoreState = {
+			currentWorkspacePath: undefined,
+			recentWorkspaces: current.recentWorkspaces,
+		};
+		this.save(nextState);
+		return nextState;
+	}
 }
