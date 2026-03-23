@@ -38,7 +38,9 @@ let skillModulePromise: Promise<CodingAgentSkillModule> | undefined;
 
 async function loadSkillModule(): Promise<CodingAgentSkillModule> {
 	if (!skillModulePromise) {
-		skillModulePromise = import("@mariozechner/pi-coding-agent").then((module) => module as unknown as CodingAgentSkillModule);
+		skillModulePromise = import("@mariozechner/pi-coding-agent").then(
+			(module) => module as unknown as CodingAgentSkillModule,
+		);
 	}
 	return skillModulePromise;
 }

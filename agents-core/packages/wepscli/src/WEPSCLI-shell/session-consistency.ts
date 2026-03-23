@@ -11,9 +11,6 @@ export function getSessionApprovalRequest(
 	return requests.find((request) => request.sessionId === sessionId);
 }
 
-export function nextFocusRegionForSession(
-	sessionId: string | undefined,
-	requests: ToolApprovalRequest[],
-): ShellFocus {
+export function nextFocusRegionForSession(sessionId: string | undefined, requests: ToolApprovalRequest[]): ShellFocus {
 	return getSessionApprovalRequest(requests, sessionId) ? "overlay" : "composer";
 }

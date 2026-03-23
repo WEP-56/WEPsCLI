@@ -106,7 +106,13 @@ declare module "@mariozechner/pi-ai" {
 }
 
 declare module "@mariozechner/pi-coding-agent" {
-	import type { AssistantMessage, AssistantMessageEvent, Model, ToolResultMessage, UserMessage } from "@mariozechner/pi-ai";
+	import type {
+		AssistantMessage,
+		AssistantMessageEvent,
+		Model,
+		ToolResultMessage,
+		UserMessage,
+	} from "@mariozechner/pi-ai";
 
 	export interface ClipboardImage {
 		bytes: Uint8Array;
@@ -145,9 +151,13 @@ declare module "@mariozechner/pi-coding-agent" {
 		| { type: "agent_start" }
 		| { type: "agent_end"; messages: Array<UserMessage | AssistantMessage | ToolResultMessage> }
 		| { type: "turn_start" }
-		| { type: "turn_end"; message: UserMessage | AssistantMessage | ToolResultMessage; toolResults: ToolResultMessage[] };
+		| {
+				type: "turn_end";
+				message: UserMessage | AssistantMessage | ToolResultMessage;
+				toolResults: ToolResultMessage[];
+		  };
 
-export interface AgentSession {
+	export interface AgentSession {
 		readonly agent: {
 			waitForIdle(): Promise<void>;
 			setBeforeToolCall?(
@@ -184,12 +194,10 @@ export interface AgentSession {
 		bindExtensions(bindings: {
 			commandContextActions: {
 				waitForIdle: () => Promise<void>;
-				newSession: (
-					options?: {
-						parentSession?: string;
-						setup?: (sessionManager: SessionManager) => Promise<void>;
-					},
-				) => Promise<{ cancelled: boolean }>;
+				newSession: (options?: {
+					parentSession?: string;
+					setup?: (sessionManager: SessionManager) => Promise<void>;
+				}) => Promise<{ cancelled: boolean }>;
 				fork: (entryId: string) => Promise<{ cancelled: boolean }>;
 				navigateTree: (
 					targetId: string,

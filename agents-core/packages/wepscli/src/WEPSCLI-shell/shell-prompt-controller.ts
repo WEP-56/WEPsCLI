@@ -1,8 +1,8 @@
-import type { ChatMessage } from "./chat-components.js";
 import type { RuntimeSelection } from "./agent-runtime.js";
+import type { ChatMessage } from "./chat-components.js";
 import type { ComposerImageAttachment } from "./image-attachments.js";
-import { executeSlashCommand, shouldHandleSlashCommandLocally } from "./slash-commands.js";
 import { applyShellModePrompt, type ShellModeId } from "./shell-modes.js";
+import { executeSlashCommand, shouldHandleSlashCommandLocally } from "./slash-commands.js";
 import type { SlashCommandItem } from "./types.js";
 
 export interface ShellPromptSession {
@@ -72,7 +72,9 @@ export function createShellPromptController<TSession extends ShellPromptSession>
 		options.setComposerText("");
 		options.clearComposerImages();
 		options.focusComposer();
-		const promptText = trimmed.startsWith("/skill:") ? trimmed : applyShellModePrompt(options.getCurrentMode(), trimmed);
+		const promptText = trimmed.startsWith("/skill:")
+			? trimmed
+			: applyShellModePrompt(options.getCurrentMode(), trimmed);
 		options.runtimePrompt(session.id, promptText, selection, composerImages, session.runtimeSessionFile);
 		options.requestRender();
 	}
@@ -81,7 +83,10 @@ export function createShellPromptController<TSession extends ShellPromptSession>
 		const session = options.currentSession() ?? options.startNewSession();
 		const lastPrompt = session?.lastPrompt?.trim();
 		if (!session || !lastPrompt) {
-			pushSystemMessage(options.createdTransientSessionId(), "No previous prompt is available to retry in this session.");
+			pushSystemMessage(
+				options.createdTransientSessionId(),
+				"No previous prompt is available to retry in this session.",
+			);
 			return;
 		}
 		submitPrompt(session, lastPrompt);
@@ -114,36 +119,40 @@ export function createShellPromptController<TSession extends ShellPromptSession>
 		}
 		options.setComposerValue("");
 		options.setComposerText("");
-		executeSlashCommand(commandId, {
-			startNewSession: options.startNewSession,
-			retryLastPrompt,
-			openSkillAdd: options.openSkillAdd,
-			openOverlay: options.openOverlay,
-			openProviderAdd: options.openProviderAdd,
-			compactCurrentSession: options.compactCurrentSession,
-			reloadCurrentSessionResources: options.reloadCurrentSessionResources,
-			abortActiveRequest: options.abortActiveRequest,
-			addImageFromPath: options.addImageFromPath,
-			pasteComposerImage: options.pasteComposerImage,
-			clearComposerImages: options.clearComposerImages,
-			describeComposerImages: options.describeComposerImages,
-			setMode: options.applyShellMode,
-			getCurrentMode: options.getCurrentMode,
-			getStatusSummary: options.getStatusSummary,
-			showSkillsSummary: options.showSkillsSummary,
-			queuePromptTemplate: (title, prompt, summary) => {
-				const session = options.currentSession() ?? options.startNewSession();
-				pushSystemMessage(session.id, `${title}: ${summary}`);
-				options.setComposerValue(prompt);
-				options.setComposerText(prompt);
-				options.focusComposer();
-				options.setFocusRegionComposer();
+		executeSlashCommand(
+			commandId,
+			{
+				startNewSession: options.startNewSession,
+				retryLastPrompt,
+				openSkillAdd: options.openSkillAdd,
+				openOverlay: options.openOverlay,
+				openProviderAdd: options.openProviderAdd,
+				compactCurrentSession: options.compactCurrentSession,
+				reloadCurrentSessionResources: options.reloadCurrentSessionResources,
+				abortActiveRequest: options.abortActiveRequest,
+				addImageFromPath: options.addImageFromPath,
+				pasteComposerImage: options.pasteComposerImage,
+				clearComposerImages: options.clearComposerImages,
+				describeComposerImages: options.describeComposerImages,
+				setMode: options.applyShellMode,
+				getCurrentMode: options.getCurrentMode,
+				getStatusSummary: options.getStatusSummary,
+				showSkillsSummary: options.showSkillsSummary,
+				queuePromptTemplate: (title, prompt, summary) => {
+					const session = options.currentSession() ?? options.startNewSession();
+					pushSystemMessage(session.id, `${title}: ${summary}`);
+					options.setComposerValue(prompt);
+					options.setComposerText(prompt);
+					options.focusComposer();
+					options.setFocusRegionComposer();
+				},
+				pushTimeline: (message) => {
+					const session = options.currentSession() ?? options.startNewSession();
+					pushSystemMessage(session.id, message);
+				},
 			},
-			pushTimeline: (message) => {
-				const session = options.currentSession() ?? options.startNewSession();
-				pushSystemMessage(session.id, message);
-			},
-		}, options.getAdditionalSlashCommands?.() ?? []);
+			options.getAdditionalSlashCommands?.() ?? [],
+		);
 	}
 
 	return {

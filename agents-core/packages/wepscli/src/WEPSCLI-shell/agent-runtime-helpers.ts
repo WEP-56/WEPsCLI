@@ -1,9 +1,7 @@
 import { join } from "node:path";
-import type { AgentSession } from "@mariozechner/pi-coding-agent";
 import type { AssistantMessage, UserMessage } from "@mariozechner/pi-ai";
+import type { AgentSession } from "@mariozechner/pi-coding-agent";
 import type { DiscoveredModel } from "../provider-profiles/index.js";
-import type { ChatImageAttachment } from "./image-attachments.js";
-import { imageAttachmentsFromMessageContent } from "./image-attachments.js";
 import type {
 	BeforeToolCallHandler,
 	CodingAgentRuntime,
@@ -11,12 +9,16 @@ import type {
 	RuntimeSessionRecord,
 } from "./agent-runtime-types.js";
 import type { ChatMessage } from "./chat-components.js";
+import type { ChatImageAttachment } from "./image-attachments.js";
+import { imageAttachmentsFromMessageContent } from "./image-attachments.js";
 
 let codingAgentRuntimePromise: Promise<CodingAgentRuntime> | undefined;
 
 export async function loadCodingAgentRuntime(): Promise<CodingAgentRuntime> {
 	if (!codingAgentRuntimePromise) {
-		codingAgentRuntimePromise = import("@mariozechner/pi-coding-agent").then((module) => module as CodingAgentRuntime);
+		codingAgentRuntimePromise = import("@mariozechner/pi-coding-agent").then(
+			(module) => module as CodingAgentRuntime,
+		);
 	}
 	return codingAgentRuntimePromise;
 }
@@ -90,10 +92,9 @@ export function extractUserText(message: UserMessage): string {
 	const content =
 		typeof message.content === "string"
 			? message.content
-			: extractTextBlocks(
-					message.content as unknown as Array<{ type: string; [key: string]: unknown }>,
-					{ includeImages: false },
-				);
+			: extractTextBlocks(message.content as unknown as Array<{ type: string; [key: string]: unknown }>, {
+					includeImages: false,
+				});
 	return summarizeSkillBlock(content) ?? content;
 }
 
@@ -102,9 +103,7 @@ export function extractUserImages(message: UserMessage): ChatImageAttachment[] {
 		return [];
 	}
 
-	return imageAttachmentsFromMessageContent(
-		message.content as unknown as Array<{ type?: string; mimeType?: string }>,
-	);
+	return imageAttachmentsFromMessageContent(message.content as unknown as Array<{ type?: string; mimeType?: string }>);
 }
 
 export function extractAssistantVisibleText(message: AssistantMessage): string {
@@ -125,7 +124,10 @@ export function extractAssistantVisibleText(message: AssistantMessage): string {
 export function extractAssistantReasoning(message: AssistantMessage): string {
 	return extractTextBlocks(
 		message.content
-			.filter((item): item is Extract<AssistantMessage["content"][number], { type: "thinking" }> => item.type === "thinking")
+			.filter(
+				(item): item is Extract<AssistantMessage["content"][number], { type: "thinking" }> =>
+					item.type === "thinking",
+			)
 			.map((item) => ({ type: item.type, thinking: item.thinking })),
 	);
 }

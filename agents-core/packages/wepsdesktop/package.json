@@ -1,0 +1,26 @@
+{
+	"name": "wepsdesktop",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"main": "./dist/main/index.js",
+	"scripts": {
+		"dev": "electron-vite dev",
+		"build": "electron-vite build",
+		"check": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+		"clean": "shx rm -rf dist"
+	},
+	"dependencies": {
+		"@mariozechner/mini-lit": "^0.2.0",
+		"@mariozechner/pi-agent-core": "file:../agent",
+		"@mariozechner/pi-ai": "file:../ai",
+		"@mariozechner/pi-web-ui": "file:../web-ui",
+		"lit": "^3.3.1"
+	},
+	"devDependencies": {
+		"electron": "40.4.1",
+		"electron-vite": "^5.0.0",
+		"shx": "^0.4.0",
+		"typescript": "^5.7.3"
+	}
+}

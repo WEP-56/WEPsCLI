@@ -1,11 +1,11 @@
-import chalk from "chalk";
-import { appendFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { appendFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
+import chalk from "chalk";
 import { APP_NAME, ensureAgentDir, getAgentDir, getAuthPath, getProvidersPath, getSettingsPath } from "./config.js";
-import { ProviderProfileService } from "./provider-profiles/index.js";
 import { runOnboarding } from "./onboarding/run-onboarding.js";
+import { ProviderProfileService } from "./provider-profiles/index.js";
 
 const require = createRequire(import.meta.url);
 const { version: APP_VERSION } = require("../package.json") as { version: string };
@@ -13,8 +13,12 @@ const { version: APP_VERSION } = require("../package.json") as { version: string
 function writeStartupErrorLog(label: string, error: unknown): void {
 	try {
 		const agentDir = ensureAgentDir();
-		const details = error instanceof Error ? error.stack ?? error.message : String(error);
-		appendFileSync(`${agentDir}\\startup-error.log`, `[${new Date().toISOString()}] ${label}\n${details}\n\n`, "utf8");
+		const details = error instanceof Error ? (error.stack ?? error.message) : String(error);
+		appendFileSync(
+			`${agentDir}\\startup-error.log`,
+			`[${new Date().toISOString()}] ${label}\n${details}\n\n`,
+			"utf8",
+		);
 	} catch {}
 }
 
@@ -134,7 +138,7 @@ export async function main(args: string[]): Promise<void> {
 			return;
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
-			const details = error instanceof Error ? error.stack ?? error.message : String(error);
+			const details = error instanceof Error ? (error.stack ?? error.message) : String(error);
 			writeStartupErrorLog("WEPSCLI-shell startup error", error);
 			console.log(chalk.yellow("WEPSCLI-shell could not start. Falling back to the temporary shell."));
 			console.log(chalk.dim(message));

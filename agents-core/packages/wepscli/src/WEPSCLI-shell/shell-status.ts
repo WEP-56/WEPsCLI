@@ -1,4 +1,4 @@
-import { runtimeStateTone, type RuntimeSessionState } from "./runtime-status.js";
+import { type RuntimeSessionState, runtimeStateTone } from "./runtime-status.js";
 import { wepscliShellTheme as theme } from "./theme.js";
 
 export function runtimeStatusColor(state: RuntimeSessionState): string {

@@ -1,6 +1,6 @@
 import { join } from "node:path";
-import type { AgentSession, AgentSessionEvent, AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
 import type { ImageContent, Model } from "@mariozechner/pi-ai";
+import type { AgentSession, AgentSessionEvent, AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
 import { getAgentDir } from "../config.js";
 import type { DiscoveredModel, ProviderProfile, ProviderProfileService } from "../provider-profiles/index.js";
 import { handleAgentSessionEvent } from "./agent-runtime-events.js";
@@ -27,6 +27,7 @@ import type {
 	RuntimeSessionRecord,
 } from "./agent-runtime-types.js";
 import type { ChatMessage } from "./chat-components.js";
+import { getRuntimeRecoveryHint } from "./runtime-recovery.js";
 import {
 	createCompactingRuntimeState,
 	createErrorRuntimeState,
@@ -35,14 +36,9 @@ import {
 	createRunningRuntimeState,
 	type RuntimeSessionState,
 } from "./runtime-status.js";
-import { getRuntimeRecoveryHint } from "./runtime-recovery.js";
 import type { ShellModeId } from "./shell-modes.js";
-import {
-	createToolApprovalRequest,
-	toolApprovalDecisionReason,
-	type ToolApprovalDecision,
-} from "./tool-approval.js";
-import { createToolMessageState, updateToolMessageState, type ToolMessageState } from "./tool-messages.js";
+import { createToolApprovalRequest, type ToolApprovalDecision, toolApprovalDecisionReason } from "./tool-approval.js";
+import { createToolMessageState, type ToolMessageState, updateToolMessageState } from "./tool-messages.js";
 
 export type { RuntimeSelection } from "./agent-runtime-types.js";
 
@@ -100,7 +96,11 @@ export class WepsAgentRuntime {
 		}
 	}
 
-	async loadSession(sessionId: string, selection: RuntimeSelection, binding: RuntimeSessionBinding = {}): Promise<void> {
+	async loadSession(
+		sessionId: string,
+		selection: RuntimeSelection,
+		binding: RuntimeSessionBinding = {},
+	): Promise<void> {
 		await this.ensureSession(sessionId, selection, binding);
 	}
 
@@ -435,7 +435,11 @@ export class WepsAgentRuntime {
 		if (record.activePrompts > 0) {
 			return;
 		}
-		if (record.runtimeState.phase === "running" || record.runtimeState.phase === "retrying" || record.runtimeState.phase === "compacting") {
+		if (
+			record.runtimeState.phase === "running" ||
+			record.runtimeState.phase === "retrying" ||
+			record.runtimeState.phase === "compacting"
+		) {
 			this.setRuntimeState(sessionId, record, createIdleRuntimeState());
 		}
 	}
@@ -473,7 +477,11 @@ export class WepsAgentRuntime {
 		record.streamingReasoningMessageId = undefined;
 	}
 
-	private resolveSelection(selection: RuntimeSelection): { profile: ProviderProfile; modelId: string; apiKey: string } {
+	private resolveSelection(selection: RuntimeSelection): {
+		profile: ProviderProfile;
+		modelId: string;
+		apiKey: string;
+	} {
 		const profileId = selection.profileId ?? this.profileService.getActiveSelection().profileId;
 		if (!profileId) {
 			throw new Error("No provider profile selected");
@@ -529,7 +537,13 @@ export class WepsAgentRuntime {
 			return;
 		}
 
-		this.registerProfileProvider(record.modelRegistry, record.authStorage, resolved.profile, resolved.modelId, resolved.apiKey);
+		this.registerProfileProvider(
+			record.modelRegistry,
+			record.authStorage,
+			resolved.profile,
+			resolved.modelId,
+			resolved.apiKey,
+		);
 		const model = record.modelRegistry.find(resolved.profile.id, resolved.modelId);
 		if (!model) {
 			throw new Error(`Model ${resolved.modelId} is unavailable for ${resolved.profile.label}`);
@@ -550,7 +564,12 @@ export class WepsAgentRuntime {
 		});
 	}
 
-	private applyRecoveryState(sessionId: string, record: RuntimeSessionRecord, message: string, fallbackLabel: string): void {
+	private applyRecoveryState(
+		sessionId: string,
+		record: RuntimeSessionRecord,
+		message: string,
+		fallbackLabel: string,
+	): void {
 		const hint = getRuntimeRecoveryHint(message);
 		this.setRuntimeState(sessionId, record, createErrorRuntimeState(hint?.label ?? fallbackLabel, message));
 		if (hint?.nextStep) {
@@ -631,7 +650,8 @@ export class WepsAgentRuntime {
 		},
 	): void {
 		const messageId = record.toolMessageIds.get(toolCallId);
-		const currentTool = record.toolStates.get(toolCallId) ?? createToolMessageState(toolCallId, toolName, update.args);
+		const currentTool =
+			record.toolStates.get(toolCallId) ?? createToolMessageState(toolCallId, toolName, update.args);
 		const nextTool = updateToolMessageState(currentTool, update);
 		record.toolStates.set(toolCallId, nextTool);
 		if (messageId) {
@@ -677,11 +697,7 @@ export class WepsAgentRuntime {
 			status: "awaiting_approval",
 			args,
 		});
-		this.setRuntimeState(
-			sessionId,
-			record,
-			createRunningRuntimeState(`Awaiting approval for ${toolName}`),
-		);
+		this.setRuntimeState(sessionId, record, createRunningRuntimeState(`Awaiting approval for ${toolName}`));
 		this.callbacks.openApproval(sessionId, request);
 
 		const decision = await new Promise<ToolApprovalDecision>((resolve) => {

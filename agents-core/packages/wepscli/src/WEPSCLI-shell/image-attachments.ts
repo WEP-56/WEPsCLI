@@ -34,8 +34,10 @@ async function loadCodingAgentImageUtils(): Promise<CodingAgentImageUtils> {
 			import(moduleUrl("image-resize.js")),
 			import(moduleUrl("mime.js")),
 		]).then(([clipboardModule, resizeModule, mimeModule]) => ({
-			detectSupportedImageMimeTypeFromFile: mimeModule.detectSupportedImageMimeTypeFromFile as CodingAgentImageUtils["detectSupportedImageMimeTypeFromFile"],
-			extensionForImageMimeType: clipboardModule.extensionForImageMimeType as CodingAgentImageUtils["extensionForImageMimeType"],
+			detectSupportedImageMimeTypeFromFile:
+				mimeModule.detectSupportedImageMimeTypeFromFile as CodingAgentImageUtils["detectSupportedImageMimeTypeFromFile"],
+			extensionForImageMimeType:
+				clipboardModule.extensionForImageMimeType as CodingAgentImageUtils["extensionForImageMimeType"],
 			readClipboardImage: clipboardModule.readClipboardImage as CodingAgentImageUtils["readClipboardImage"],
 			resizeImage: resizeModule.resizeImage as CodingAgentImageUtils["resizeImage"],
 		}));
@@ -62,10 +64,7 @@ function normalizeMimeType(mimeType: string): string {
 
 function stripWrappingQuotes(value: string): string {
 	const trimmed = value.trim();
-	if (
-		(trimmed.startsWith("\"") && trimmed.endsWith("\"")) ||
-		(trimmed.startsWith("'") && trimmed.endsWith("'"))
-	) {
+	if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
 		return trimmed.slice(1, -1);
 	}
 	return trimmed;
@@ -159,9 +158,9 @@ export async function createComposerImageAttachmentFromFile(
 	};
 }
 
-export async function createComposerImageAttachmentFromClipboard(options: {
-	autoResize?: boolean;
-} = {}): Promise<ComposerImageAttachment | null> {
+export async function createComposerImageAttachmentFromClipboard(
+	options: { autoResize?: boolean } = {},
+): Promise<ComposerImageAttachment | null> {
 	const { extensionForImageMimeType, readClipboardImage } = await loadCodingAgentImageUtils();
 	const clipboardImage = await readClipboardImage();
 	if (!clipboardImage) {

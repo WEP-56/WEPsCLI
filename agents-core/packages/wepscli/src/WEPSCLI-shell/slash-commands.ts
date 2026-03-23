@@ -1,12 +1,21 @@
+import {
+	buildShellModeSlashCommands,
+	findShellModeByCommand,
+	type ShellModeId,
+	shellModeHelpMessage,
+} from "./shell-modes.js";
 import type { SlashCommandItem } from "./types.js";
-import { buildShellModeSlashCommands, findShellModeByCommand, shellModeHelpMessage, type ShellModeId } from "./shell-modes.js";
 
 const ALL_SLASH_COMMANDS: SlashCommandItem[] = [
 	{ id: "/new", label: "/new", description: "Stage a new shell session", keyHint: "n" },
 	{ id: "/clear", label: "/clear", description: "Start a fresh session immediately", keyHint: "l" },
 	{ id: "/retry", label: "/retry", description: "Resend the last prompt in the current session", keyHint: "y" },
 	{ id: "/skills", label: "/skills", description: "List installed skills and validation diagnostics" },
-	{ id: "/skills reload", label: "/skills reload", description: "Reload skills, prompts, and extensions for the current session" },
+	{
+		id: "/skills reload",
+		label: "/skills reload",
+		description: "Reload skills, prompts, and extensions for the current session",
+	},
 	{ id: "/skill add", label: "/skill add", description: "Install a skill into WEPSCLI from a local path" },
 	{ id: "/provider", label: "/provider", description: "Open the provider picker" },
 	{ id: "/providers", label: "/providers", description: "Open the provider picker", keyHint: "p" },
@@ -92,7 +101,11 @@ export function shouldInsertSlashCommand(commandId: string): boolean {
 	return commandId.startsWith("/skill:");
 }
 
-export function executeSlashCommand(commandId: string, handlers: SlashHandlers, additionalCommands: SlashCommandItem[] = []): void {
+export function executeSlashCommand(
+	commandId: string,
+	handlers: SlashHandlers,
+	additionalCommands: SlashCommandItem[] = [],
+): void {
 	const trimmed = commandId.trim();
 	if (trimmed === "/image") {
 		handlers.pushTimeline(handlers.describeComposerImages());
@@ -189,12 +202,13 @@ export function executeSlashCommand(commandId: string, handlers: SlashHandlers, 
 				"Queued a provider-state inspection task from the slash menu.",
 			);
 			return;
-		default:
+		default: {
 			const mode = findShellModeByCommand(commandId);
 			if (mode) {
 				handlers.setMode(mode.id);
 				return;
 			}
 			handlers.pushTimeline(`Unknown slash command: ${commandId}`);
+		}
 	}
 }

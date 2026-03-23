@@ -1,5 +1,0 @@
-{
-  "dependencies": {
-    "wepscli": "file:../agents-core/packages/wepscli/wepscli-0.1.7.tgz"
-  }
-}

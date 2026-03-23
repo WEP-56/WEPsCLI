@@ -1,6 +1,6 @@
 # WEPsCodingCLI
 
-`WEPsCodingCLI` 是一个本地开发工作区，核心目标是在 `agents-core/packages/wepscli` 上持续构建一个 TUI-first 的 coding agent CLI，并逐步把 shell、runtime、审批、中断、会话等能力接到真实共享 runtime。
+`WEPsCodingCLI` 是一个本地开发工作区，核心目标是在 `agents-core/packages/wepscli` 上持续构建一个 TUI-first、desktop-second 的 coding agent CLI，并逐步把 shell、runtime、审批、中断、会话等能力接到真实共享 runtime。
 
 当前仓库不是一个“纯净的单包项目”，而是一个围绕 `wepscli` 的研发工作区，包含：
 
@@ -8,11 +8,9 @@
   基于 `pi` monorepo 的共享能力层，里面有 `ai`、`agent`、`coding-agent`、`wepscli` 等 package。
 - `agents-core/packages/wepscli/`
   当前主开发目标，新的 WEPSCLI TUI 壳和运行时接线都在这里。
-- `CLI/tui-learning/`
-  用来参考和学习的 TUI 项目与实验目录。
 - `docs/`
   项目文档目录。
-- `TODO.md`
+- `TODO.md`（稳健阶段）、`TODO2.md`（堆料阶段）
   当前分阶段路线图。
 
 ## 快速体验
@@ -37,13 +35,7 @@ user/username/.wepscli
 
 ## 当前进度
 
-根据当前工作区进展，已经推进到：
-
-- P1: tool 执行主链路
-- P2: 审批 / 权限交互
-- P3: 中断 / 重试 / 错误恢复的最小闭环
-
-后续阶段请直接看 [`TODO.md`](./TODO.md)。
+请直接看 [`TODO.md`](./TODO.md)。
 
 ## 目录结构
 

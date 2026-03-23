@@ -1,5 +1,5 @@
-import type { SlashCommandItem } from "./types.js";
 import type { Skill } from "../skills/skill-service.js";
+import type { SlashCommandItem } from "./types.js";
 
 export function buildSkillSlashCommands(skills: Skill[]): SlashCommandItem[] {
 	return skills.map((skill) => ({

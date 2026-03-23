@@ -1,5 +1,15 @@
-import type { AgentSessionEvent } from "@mariozechner/pi-coding-agent";
 import type { AssistantMessage, UserMessage } from "@mariozechner/pi-ai";
+import type { AgentSessionEvent } from "@mariozechner/pi-coding-agent";
+import {
+	createMessageId,
+	extractAssistantReasoning,
+	extractAssistantVisibleText,
+	extractUserImages,
+	extractUserText,
+	formatTime,
+} from "./agent-runtime-helpers.js";
+import type { RuntimeCallbacks, RuntimeSessionRecord } from "./agent-runtime-types.js";
+import { getRuntimeRecoveryHint } from "./runtime-recovery.js";
 import {
 	createCompactingRuntimeState,
 	createErrorRuntimeState,
@@ -8,17 +18,7 @@ import {
 	createRunningRuntimeState,
 	type RuntimeSessionState,
 } from "./runtime-status.js";
-import { getRuntimeRecoveryHint } from "./runtime-recovery.js";
-import type { RuntimeCallbacks, RuntimeSessionRecord } from "./agent-runtime-types.js";
-import {
-	createMessageId,
-	extractUserImages,
-	extractAssistantReasoning,
-	extractAssistantVisibleText,
-	extractUserText,
-	formatTime,
-} from "./agent-runtime-helpers.js";
-import { createToolMessageState, updateToolMessageState, type ToolMessageState } from "./tool-messages.js";
+import { createToolMessageState, type ToolMessageState, updateToolMessageState } from "./tool-messages.js";
 
 export interface AgentRuntimeEventHandlerContext {
 	sessionId: string;
@@ -32,10 +32,7 @@ export interface AgentRuntimeEventHandlerContext {
 	setRuntimeState: (state: RuntimeSessionState) => void;
 }
 
-export function handleAgentSessionEvent(
-	event: AgentSessionEvent,
-	context: AgentRuntimeEventHandlerContext,
-): void {
+export function handleAgentSessionEvent(event: AgentSessionEvent, context: AgentRuntimeEventHandlerContext): void {
 	const { sessionId, record, callbacks } = context;
 
 	switch (event.type) {
@@ -235,10 +232,7 @@ export function handleAgentSessionEvent(
 
 		case "auto_retry_start":
 			context.setRuntimeState(
-				createRetryingRuntimeState(
-					`Retrying (${event.attempt}/${event.maxAttempts})`,
-					event.errorMessage,
-				),
+				createRetryingRuntimeState(`Retrying (${event.attempt}/${event.maxAttempts})`, event.errorMessage),
 			);
 			context.appendSystemMessage(
 				`Retrying request (${event.attempt}/${event.maxAttempts}) after error: ${event.errorMessage}`,

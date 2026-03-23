@@ -1,6 +1,6 @@
 import { useKeyboard } from "@opentui/solid";
-import { wrapIndex } from "./helpers.js";
 import { writeShellDebugLog } from "./debug-log.js";
+import { wrapIndex } from "./helpers.js";
 import type { ShellModeId } from "./shell-modes.js";
 import type { ToolApprovalDecision } from "./tool-approval.js";
 import type { OverlayKind, ShellFocus } from "./types.js";
@@ -36,10 +36,7 @@ interface ShellKeyboardActions {
 	setFocusRegion: (region: ShellFocus) => void;
 }
 
-export function useShellKeyboard(
-	state: ShellKeyboardStateAccessors,
-	actions: ShellKeyboardActions,
-): void {
+export function useShellKeyboard(state: ShellKeyboardStateAccessors, actions: ShellKeyboardActions): void {
 	useKeyboard((evt) => {
 		writeShellDebugLog(`key name=${evt.name} focus=${state.focusRegion()} overlay=${state.overlay() ?? "none"}`);
 
