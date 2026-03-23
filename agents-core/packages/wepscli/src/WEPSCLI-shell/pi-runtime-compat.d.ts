@@ -108,6 +108,11 @@ declare module "@mariozechner/pi-ai" {
 declare module "@mariozechner/pi-coding-agent" {
 	import type { AssistantMessage, AssistantMessageEvent, Model, ToolResultMessage, UserMessage } from "@mariozechner/pi-ai";
 
+	export interface ClipboardImage {
+		bytes: Uint8Array;
+		mimeType: string;
+	}
+
 	export interface ExtensionError {
 		extensionPath: string;
 		error: string;
@@ -257,6 +262,25 @@ export interface AgentSession {
 	export class SettingsManager {
 		static inMemory(settings?: Record<string, unknown>): SettingsManager;
 	}
+
+	export function extensionForImageMimeType(mimeType: string): string | null;
+	export function readClipboardImage(options?: {
+		env?: NodeJS.ProcessEnv;
+		platform?: NodeJS.Platform;
+	}): Promise<ClipboardImage | null>;
+	export function detectSupportedImageMimeTypeFromFile(filePath: string): Promise<string | null>;
+	export function resizeImage(
+		img: import("@mariozechner/pi-ai").ImageContent,
+		options?: Record<string, unknown>,
+	): Promise<{
+		data: string;
+		mimeType: string;
+		width: number;
+		height: number;
+		originalWidth: number;
+		originalHeight: number;
+		resized: boolean;
+	}>;
 
 	export function createAgentSession(options?: {
 		cwd?: string;

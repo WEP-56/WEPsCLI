@@ -2,6 +2,8 @@ import { join } from "node:path";
 import type { AgentSession } from "@mariozechner/pi-coding-agent";
 import type { AssistantMessage, UserMessage } from "@mariozechner/pi-ai";
 import type { DiscoveredModel } from "../provider-profiles/index.js";
+import type { ChatImageAttachment } from "./image-attachments.js";
+import { imageAttachmentsFromMessageContent } from "./image-attachments.js";
 import type {
 	BeforeToolCallHandler,
 	CodingAgentRuntime,
@@ -48,13 +50,20 @@ function guessReasoningSupport(modelId: string): boolean {
 	].some((token) => value.includes(token));
 }
 
-function extractTextBlocks(content: Array<{ type: string; [key: string]: unknown }>): string {
+function extractTextBlocks(
+	content: Array<{ type: string; [key: string]: unknown }>,
+	options: {
+		includeImages?: boolean;
+	} = {},
+): string {
+	const includeImages = options.includeImages ?? true;
+
 	return content
 		.map((item) => {
 			if (item.type === "text" && typeof item.text === "string") {
 				return item.text;
 			}
-			if (item.type === "image") {
+			if (includeImages && item.type === "image") {
 				return "[image]";
 			}
 			if (item.type === "thinking" && typeof item.thinking === "string") {
@@ -81,8 +90,21 @@ export function extractUserText(message: UserMessage): string {
 	const content =
 		typeof message.content === "string"
 			? message.content
-			: extractTextBlocks(message.content as unknown as Array<{ type: string; [key: string]: unknown }>);
+			: extractTextBlocks(
+					message.content as unknown as Array<{ type: string; [key: string]: unknown }>,
+					{ includeImages: false },
+				);
 	return summarizeSkillBlock(content) ?? content;
+}
+
+export function extractUserImages(message: UserMessage): ChatImageAttachment[] {
+	if (typeof message.content === "string") {
+		return [];
+	}
+
+	return imageAttachmentsFromMessageContent(
+		message.content as unknown as Array<{ type?: string; mimeType?: string }>,
+	);
 }
 
 export function extractAssistantVisibleText(message: AssistantMessage): string {

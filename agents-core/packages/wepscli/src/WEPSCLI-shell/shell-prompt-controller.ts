@@ -1,5 +1,6 @@
 import type { ChatMessage } from "./chat-components.js";
 import type { RuntimeSelection } from "./agent-runtime.js";
+import type { ComposerImageAttachment } from "./image-attachments.js";
 import { executeSlashCommand, shouldHandleSlashCommandLocally } from "./slash-commands.js";
 import { applyShellModePrompt, type ShellModeId } from "./shell-modes.js";
 import type { SlashCommandItem } from "./types.js";
@@ -21,14 +22,25 @@ interface ShellPromptControllerOptions<TSession extends ShellPromptSession> {
 	pushChatMessage: (sessionId: string, message: ChatMessage) => void;
 	setComposerValue: (value: string) => void;
 	setComposerText: (value: string) => void;
+	getComposerImages: () => ComposerImageAttachment[];
+	clearComposerImages: () => void;
 	focusComposer: () => void;
 	setFocusRegionComposer: () => void;
 	requestRender: () => void;
-	runtimePrompt: (sessionId: string, text: string, selection: RuntimeSelection, runtimeSessionFile?: string) => void;
+	runtimePrompt: (
+		sessionId: string,
+		text: string,
+		selection: RuntimeSelection,
+		images: ComposerImageAttachment[],
+		runtimeSessionFile?: string,
+	) => void;
 	reloadCurrentSessionResources: () => Promise<void> | void;
 	openSkillAdd: () => void;
 	openOverlay: (kind: "provider" | "model" | "session") => void;
 	openProviderAdd: () => void;
+	addImageFromPath: (path: string) => Promise<void> | void;
+	pasteComposerImage: () => Promise<void> | void;
+	describeComposerImages: () => string;
 	compactCurrentSession: () => Promise<void> | void;
 	abortActiveRequest: () => void;
 	applyShellMode: (modeId: ShellModeId) => void;
@@ -55,11 +67,13 @@ export function createShellPromptController<TSession extends ShellPromptSession>
 		options.ensureSessionTranscript(session.id);
 		const selection = options.selectionForSession(session);
 		options.updatePromptSession(session, trimmed, selection);
+		const composerImages = options.getComposerImages();
 		options.setComposerValue("");
 		options.setComposerText("");
+		options.clearComposerImages();
 		options.focusComposer();
 		const promptText = trimmed.startsWith("/skill:") ? trimmed : applyShellModePrompt(options.getCurrentMode(), trimmed);
-		options.runtimePrompt(session.id, promptText, selection, session.runtimeSessionFile);
+		options.runtimePrompt(session.id, promptText, selection, composerImages, session.runtimeSessionFile);
 		options.requestRender();
 	}
 
@@ -75,7 +89,7 @@ export function createShellPromptController<TSession extends ShellPromptSession>
 
 	function handleComposerSubmit(value: string): void {
 		const trimmed = value.trim();
-		if (!trimmed) {
+		if (!trimmed && options.getComposerImages().length === 0) {
 			return;
 		}
 
@@ -109,6 +123,10 @@ export function createShellPromptController<TSession extends ShellPromptSession>
 			compactCurrentSession: options.compactCurrentSession,
 			reloadCurrentSessionResources: options.reloadCurrentSessionResources,
 			abortActiveRequest: options.abortActiveRequest,
+			addImageFromPath: options.addImageFromPath,
+			pasteComposerImage: options.pasteComposerImage,
+			clearComposerImages: options.clearComposerImages,
+			describeComposerImages: options.describeComposerImages,
 			setMode: options.applyShellMode,
 			getCurrentMode: options.getCurrentMode,
 			getStatusSummary: options.getStatusSummary,

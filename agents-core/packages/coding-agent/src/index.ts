@@ -327,6 +327,9 @@ export {
 } from "./modes/interactive/theme/theme.js";
 // Clipboard utilities
 export { copyToClipboard } from "./utils/clipboard.js";
+export { extensionForImageMimeType, readClipboardImage } from "./utils/clipboard-image.js";
 export { parseFrontmatter, stripFrontmatter } from "./utils/frontmatter.js";
+export { resizeImage } from "./utils/image-resize.js";
+export { detectSupportedImageMimeTypeFromFile } from "./utils/mime.js";
 // Shell utilities
 export { getShellConfig } from "./utils/shell.js";

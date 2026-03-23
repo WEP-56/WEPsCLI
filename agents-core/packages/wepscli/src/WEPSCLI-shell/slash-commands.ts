@@ -23,6 +23,10 @@ const ALL_SLASH_COMMANDS: SlashCommandItem[] = [
 	{ id: "/review", label: "/review", description: "Queue a review-first prompt template" },
 	{ id: "/debug", label: "/debug", description: "Queue a debugging prompt template" },
 	{ id: "/provider-check", label: "/provider-check", description: "Queue a provider verification task" },
+	{ id: "/image", label: "/image", description: "Show pending image attachments and image input help" },
+	{ id: "/image add", label: "/image add", description: "Attach an image file with /image add <path>" },
+	{ id: "/image paste", label: "/image paste", description: "Paste an image from the clipboard into the composer" },
+	{ id: "/image clear", label: "/image clear", description: "Clear all pending image attachments from the composer" },
 	...buildShellModeSlashCommands(),
 ];
 
@@ -35,6 +39,10 @@ interface SlashHandlers {
 	compactCurrentSession: () => Promise<void> | void;
 	reloadCurrentSessionResources: () => Promise<void> | void;
 	abortActiveRequest: () => void;
+	addImageFromPath: (path: string) => Promise<void> | void;
+	pasteComposerImage: () => Promise<void> | void;
+	clearComposerImages: () => void;
+	describeComposerImages: () => string;
 	setMode: (modeId: ShellModeId) => void;
 	getCurrentMode: () => ShellModeId;
 	getStatusSummary: () => string;
@@ -85,7 +93,34 @@ export function shouldInsertSlashCommand(commandId: string): boolean {
 }
 
 export function executeSlashCommand(commandId: string, handlers: SlashHandlers, additionalCommands: SlashCommandItem[] = []): void {
-	switch (commandId) {
+	const trimmed = commandId.trim();
+	if (trimmed === "/image") {
+		handlers.pushTimeline(handlers.describeComposerImages());
+		return;
+	}
+	if (trimmed === "/image add") {
+		handlers.pushTimeline("Usage: /image add <path-to-image>");
+		return;
+	}
+	if (trimmed.startsWith("/image add ")) {
+		const imagePath = trimmed.slice("/image add ".length).trim();
+		if (!imagePath) {
+			handlers.pushTimeline("Usage: /image add <path-to-image>");
+			return;
+		}
+		void handlers.addImageFromPath(imagePath);
+		return;
+	}
+	if (trimmed === "/image paste") {
+		void handlers.pasteComposerImage();
+		return;
+	}
+	if (trimmed === "/image clear") {
+		handlers.clearComposerImages();
+		return;
+	}
+
+	switch (trimmed) {
 		case "/new":
 		case "/clear":
 			handlers.startNewSession();

@@ -12,6 +12,7 @@ import { getRuntimeRecoveryHint } from "./runtime-recovery.js";
 import type { RuntimeCallbacks, RuntimeSessionRecord } from "./agent-runtime-types.js";
 import {
 	createMessageId,
+	extractUserImages,
 	extractAssistantReasoning,
 	extractAssistantVisibleText,
 	extractUserText,
@@ -40,13 +41,16 @@ export function handleAgentSessionEvent(
 	switch (event.type) {
 		case "message_start":
 			if (event.message.role === "user") {
-				const text = extractUserText(event.message as UserMessage);
-				if (text) {
+				const userMessage = event.message as UserMessage;
+				const text = extractUserText(userMessage);
+				const images = extractUserImages(userMessage);
+				if (text || images.length > 0) {
 					callbacks.appendMessage(sessionId, {
 						id: createMessageId(record, "user"),
 						role: "user",
 						content: text,
-						time: formatTime((event.message as UserMessage).timestamp),
+						time: formatTime(userMessage.timestamp),
+						images,
 					});
 				}
 				return;

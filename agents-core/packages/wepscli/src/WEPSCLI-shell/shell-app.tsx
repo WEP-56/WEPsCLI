@@ -29,6 +29,12 @@ import {
 } from "./transcript-state.js";
 import { TranscriptPanel } from "./transcript-panel.js";
 import {
+	createComposerImageAttachmentFromClipboard,
+	createComposerImageAttachmentFromFile,
+	toChatImageAttachment,
+	type ComposerImageAttachment,
+} from "./image-attachments.js";
+import {
 	ChatComposer,
 	OverlayPicker,
 	type ChatMessage,
@@ -47,6 +53,7 @@ export function WEPSCLIShellApp(props: { profileService: ProviderProfileService;
 	const [modelPickerProfileId, setModelPickerProfileId] = createSignal<string | undefined>(selection().profileId);
 	const [sessions, setSessions] = createSignal(sessionHistory.ensureSeed(INITIAL_SESSIONS));
 	const [composerValue, setComposerValue] = createSignal("");
+	const [composerImages, setComposerImages] = createSignal<ComposerImageAttachment[]>([]);
 	const [shellMode, setShellMode] = createSignal<ShellModeId>("agent");
 	const [activeSessionId, setActiveSessionId] = createSignal<string | undefined>(undefined);
 	const [messagesBySession, setMessagesBySession] = createSignal<Record<string, ChatMessage[]>>({});
@@ -225,6 +232,70 @@ export function WEPSCLIShellApp(props: { profileService: ProviderProfileService;
 	}
 	function requestRender(): void {
 		(renderer as { requestRender?: () => void }).requestRender?.();
+	}
+	function pasteImageShortcutLabel(): string {
+		return process.platform === "win32" ? "Alt+V" : "Ctrl+V";
+	}
+	function setComposerImageList(nextImages: ComposerImageAttachment[]): void {
+		setComposerImages(nextImages);
+		requestRender();
+	}
+	function appendComposerImage(image: ComposerImageAttachment): void {
+		setComposerImages((current) => [...current, image]);
+		requestRender();
+	}
+	function removeComposerImage(imageId: string): void {
+		setComposerImageList(composerImages().filter((image) => image.id !== imageId));
+	}
+	function clearComposerImages(): void {
+		if (composerImages().length === 0) {
+			return;
+		}
+		setComposerImageList([]);
+	}
+	function describeComposerImages(): string {
+		const images = composerImages();
+		if (images.length === 0) {
+			return `No images are attached. Use /image add <path> or ${pasteImageShortcutLabel()} to paste one.`;
+		}
+
+		return [
+			"Pending image attachments:",
+			...images.map((image) => `- ${image.label} (${image.mimeType})${image.filePath ? ` - ${image.filePath}` : ""}`),
+			"",
+			`Use /image clear to remove them or ${pasteImageShortcutLabel()} to paste another image.`,
+		].join("\n");
+	}
+	function pushStatusMessage(content: string, sessionId = currentSession()?.id ?? createdTransientSessionId()): void {
+		pushChatMessage(sessionId, {
+			id: `${sessionId}:system:${Date.now()}`,
+			role: "system",
+			content,
+			time: new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }),
+			kind: "status",
+		});
+	}
+	async function addImageFromPath(inputPath: string): Promise<void> {
+		try {
+			const attachment = await createComposerImageAttachmentFromFile(inputPath, { cwd: process.cwd() });
+			appendComposerImage(attachment);
+			setFocusRegion("composer");
+		} catch (error) {
+			pushStatusMessage(error instanceof Error ? error.message : String(error));
+		}
+	}
+	async function pasteComposerImage(): Promise<void> {
+		try {
+			const attachment = await createComposerImageAttachmentFromClipboard();
+			if (!attachment) {
+				pushStatusMessage("No image data is available in the clipboard.");
+				return;
+			}
+			appendComposerImage(attachment);
+			setFocusRegion("composer");
+		} catch (error) {
+			pushStatusMessage(error instanceof Error ? error.message : String(error));
+		}
 	}
 	function cancelTranscriptAutoScroll(): void {
 		if (!transcriptScrollTimer) {
@@ -536,6 +607,7 @@ export function WEPSCLIShellApp(props: { profileService: ProviderProfileService;
 			],
 		}));
 		setComposerValue("");
+		clearComposerImages();
 		composerRef?.focus();
 		setFocusRegion("composer");
 		requestRender();
@@ -554,9 +626,11 @@ export function WEPSCLIShellApp(props: { profileService: ProviderProfileService;
 	}
 
 	function updatePromptSession(session: NonNullable<ReturnType<typeof currentSession>>, trimmed: string, sessionSelection: RuntimeSelection): void {
+		const promptSummary =
+			trimmed || (composerImages().length > 0 ? `[${composerImages().length} image prompt]` : "Empty prompt");
 		sessionHistory.updateSession(session.id, {
-			title: `Chat: ${truncate(trimmed, 24)}`,
-			summary: `Last prompt: ${truncate(trimmed, 60)}`,
+			title: `Chat: ${truncate(promptSummary, 24)}`,
+			summary: `Last prompt: ${truncate(promptSummary, 60)}`,
 			providerProfileId: sessionSelection.profileId,
 			providerLabel: activeProfile()?.label,
 			modelId: sessionSelection.modelId,
@@ -594,16 +668,27 @@ export function WEPSCLIShellApp(props: { profileService: ProviderProfileService;
 		pushChatMessage,
 		setComposerValue,
 		setComposerText: (value) => composerRef?.setText?.(value),
+		getComposerImages: composerImages,
+		clearComposerImages,
 		focusComposer: () => composerRef?.focus(),
 		setFocusRegionComposer: () => setFocusRegion("composer"),
 		requestRender,
-		runtimePrompt: (sessionId, text, sessionSelection, runtimeSessionFile) => {
-			void runtime.prompt(sessionId, text, sessionSelection, { runtimeSessionFile });
+		runtimePrompt: (sessionId, text, sessionSelection, images, runtimeSessionFile) => {
+			void runtime.prompt(
+				sessionId,
+				text,
+				sessionSelection,
+				images.map((image) => image.image),
+				{ runtimeSessionFile },
+			);
 		},
 		reloadCurrentSessionResources,
 		openSkillAdd,
 		openOverlay,
 		openProviderAdd,
+		addImageFromPath,
+		pasteComposerImage,
+		describeComposerImages,
 		compactCurrentSession,
 		abortActiveRequest: () => {
 			void abortActiveRequest();
@@ -767,6 +852,7 @@ export function WEPSCLIShellApp(props: { profileService: ProviderProfileService;
 				modelLabel={activeModel() ?? "No model"}
 				modeLabel={activeShellMode().composerLabel}
 				modeTone={activeShellMode().tone}
+				imageAttachments={composerImages().map(toChatImageAttachment)}
 				inputRef={(ref) => {
 					composerRef = ref;
 				}}
@@ -774,6 +860,11 @@ export function WEPSCLIShellApp(props: { profileService: ProviderProfileService;
 				onFocus={() => setFocusRegion("composer")}
 				onInput={(value) => setComposerValue(value)}
 				onModeClick={() => applyShellMode(nextShellMode(shellMode()))}
+				onPasteImage={() => {
+					void pasteComposerImage();
+				}}
+				onRemoveImageAttachment={removeComposerImage}
+				onClearImageAttachments={clearComposerImages}
 				onSubmit={promptController.handleComposerSubmit}
 				onSelectSlashCommand={promptController.runSlashCommand}
 				slashCommands={skillSlashCommands()}

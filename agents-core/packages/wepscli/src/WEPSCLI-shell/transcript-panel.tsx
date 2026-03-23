@@ -130,6 +130,10 @@ function useStructuredToolSummary(message: ChatMessage): boolean {
 	);
 }
 
+function attachmentSummaryLabel(count: number): string {
+	return `${count} image${count === 1 ? "" : "s"} attached`;
+}
+
 export function TranscriptPanel(props: {
 	messages: ChatMessage[];
 	activeModelLabel: string;
@@ -210,7 +214,23 @@ export function TranscriptPanel(props: {
 											<text fg={transcriptRoleColor(message)}>{message.role.toUpperCase()}</text>
 											<text fg={theme.muted}>{truncate(message.time, 12)}</text>
 										</box>
-										<text fg={theme.text} wrapMode="word">{getVisibleMessageContent(message)}</text>
+										<Show when={getVisibleMessageContent(message)}>
+											<text fg={theme.text} wrapMode="word">{getVisibleMessageContent(message)}</text>
+										</Show>
+										<Show when={message.images?.length}>
+											<box flexDirection="column" gap={1}>
+												<text fg={theme.muted}>{attachmentSummaryLabel(message.images!.length)}</text>
+												<box flexDirection="row" gap={1}>
+													<For each={message.images}>
+														{(attachment) => (
+															<box backgroundColor={theme.panelMuted} paddingLeft={1} paddingRight={1}>
+																<text fg={theme.accent}>{truncate(attachment.label, 24)}</text>
+															</box>
+														)}
+													</For>
+												</box>
+											</box>
+										</Show>
 										<Show when={message.collapsible && isMessageOverflowing(message)}>
 											<text fg={theme.muted}>{message.expanded ? "Click to collapse" : "Click to expand"}</text>
 										</Show>

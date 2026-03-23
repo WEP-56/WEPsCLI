@@ -52,7 +52,7 @@
 - 不为了“看起来高级”引入额外复杂状态。
 - 如果一个功能已经在共享层存在，TUI 负责呈现和编排，不复制业务逻辑。
 
-## 已完成
+## 完成状态
 
 ### 基础壳层
 
@@ -211,23 +211,53 @@
   - [x] `/skills reload` 触发当前 session 资源重载
 - [ ] MCP
 - [ ] 图片
-- [ ] 拖拽
-- [ ] clipboard image
-- [ ] 更完整的 provider 管理
+- [x] clipboard image
 
-### P11 本地窗口式应用
+
+### P11 对agent core的全量支持
+
+状态：持续进行时
+
+- [ ] 更完整的 provider 管理  状态：部分适配
+  agent core：支持大量 provider、subscription `/login`、API key、自定义 model/provider，见 coding-agent README (line 79)
+  wepscli：当前只做了 openai / anthropic family 风格 endpoint，见 provider-profiles/types.ts (line 1)、provider-add-flow.tsx (line 72)
+
+- [ ] session 高阶操作  状态：未适配
+  agent core：`/tree`、`/fork`、`/session`、`/name`，见 coding-agent README (line 147)
+  wepscli：这几条还没露出 UI；更关键是 runtime command actions 里 `fork` / `navigateTree` / `switchSession` 直接返回 `cancelled`，见 agent-runtime.ts (line 295)
+
+- [ ] slash 透传 / prompt templates / extension commands  状态：未适配
+  agent core：支持 prompt templates、extension commands、扩展注册的 slash 生态，见 coding-agent README (line 137)、README (line 267)、README (line 295)
+  wepscli：当前除 `/skill:` 外几乎都被本地 slash handler 拦截，未知命令直接报 `Unknown slash command`，见 slash-commands.ts (line 87)、shell-prompt-controller.ts (line 101)
+
+- [ ] settings / theme / keybindings / hotkeys  状态：未适配
+  agent core：支持 `/settings`、`/hotkeys`、theme hot reload、keybindings 配置，见 coding-agent README (line 123)、README (line 146)、README (line 158)、README (line 164)
+  wepscli：当前 runtime 用的是 `SettingsManager.inMemory()`，还没有 `/settings` / `/hotkeys` / theme / keybindings 的壳层接入，见 agent-runtime.ts (line 272)
+
+- [ ] editor 生产力能力  状态：未适配
+  agent core：支持 `@` 文件引用、Tab 路径补全、多行输入、`!` / `!!`、外部编辑器，见 coding-agent README (line 129)
+  wepscli：当前 composer 仍是轻量输入框，已接 `/` 命令和图片附件，但还没接文件引用、补全、多行和 bash 输入壳，见 chat-components.tsx (line 214)
+
+- [ ] 消息队列 / delivery 策略  状态：未适配
+  agent core：支持 steering / follow-up / dequeue，以及对应快捷键与 settings 配置，见 coding-agent README (line 180)
+  wepscli：当前发送路径固定走 `streamingBehavior: "steer"`，没有 Alt+Enter / Alt+Up 对应的队列交互，见 agent-runtime.ts (line 84)、shell-keyboard.ts (line 46)
+
+- [ ] 常用内建命令补齐  状态：未适配
+  agent core：已有 `/copy`、`/export`、`/share`、`/reload`、`/changelog`、`/quit` / `/exit` 等常用命令，见 coding-agent README (line 154)
+  wepscli：当前只接了最小必要命令集和少量模板命令，`/skills reload` 也只是 skills 资源重载，不是完整资源重载，见 wepscli README (line 207)、slash-commands.ts (line 5)
+
+- [ ] CLI 多模式支持  状态：未适配
+  agent core：支持 interactive / print / json / rpc / SDK，见 coding-agent README (line 378)、README (line 396)
+  wepscli：当前 CLI 仍以 interactive shell 为主，只提供 `--help` / `--version`，见 main.ts (line 99)
+
+
+
+### P12 本地窗口式应用
 
  状态：待做
  
  - [ ]基于.agents-core\packages\web-ui 构建electron应用
 
-## 当前下一步
-
-当前回到 `P5 Slash Commands 实功能化`，优先补:
-
-- 其他高频命令（如确有需要再补）
-- 现有 slash commands 的执行反馈与结果回显收口
-- 保持键盘 / 鼠标路径一致
 
 ## 执行顺序
 
@@ -242,6 +272,8 @@
 7. P8 多会话一致性补完
 8. P9 模式层
 9. P10 高级扩展
+10. P11 对agent core的全量支持
+11. P12 本地窗口式应用
 
 ## 禁止事项
 

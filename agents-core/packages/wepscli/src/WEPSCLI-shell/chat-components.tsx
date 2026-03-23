@@ -1,5 +1,6 @@
 import { useKeyboard } from "@opentui/solid";
 import { For, Show, createEffect, createMemo, createSignal } from "solid-js";
+import type { ChatImageAttachment } from "./image-attachments.js";
 import { getSlashCommands, shouldInsertSlashCommand } from "./slash-commands.js";
 import type { ShellModeTone } from "./shell-modes.js";
 import { wepscliShellTheme as theme } from "./theme.js";
@@ -21,6 +22,7 @@ export interface ChatMessage {
 	role: ChatMessageRole;
 	content: string;
 	time: string;
+	images?: ChatImageAttachment[];
 	kind?: ChatMessageKind;
 	collapsible?: boolean;
 	expanded?: boolean;
@@ -93,8 +95,12 @@ export function ChatComposer(props: {
 	onFocus: () => void;
 	onInput: (value: string) => void;
 	onModeClick: () => void;
+	onPasteImage: () => void;
+	onRemoveImageAttachment: (id: string) => void;
+	onClearImageAttachments: () => void;
 	onSubmit: (value: string) => void;
 	onSelectSlashCommand: (id: string) => void;
+	imageAttachments: ChatImageAttachment[];
 	slashCommands?: SlashCommandItem[];
 }) {
 	let inputRef: ComposerInputRef | undefined;
@@ -110,6 +116,12 @@ export function ChatComposer(props: {
 	});
 
 	useKeyboard((evt) => {
+		if (props.focused && isPasteImageKey(evt)) {
+			evt.preventDefault();
+			props.onPasteImage();
+			return;
+		}
+
 		if (!props.focused || visibleSlashOptions().length === 0 || !draftValue().trim().startsWith("/")) {
 			return;
 		}
@@ -175,6 +187,21 @@ export function ChatComposer(props: {
 					</For>
 				</box>
 			) : null}
+			<Show when={props.imageAttachments.length > 0}>
+				<box backgroundColor={theme.panel} border={["bottom"]} borderColor={theme.border} paddingLeft={1} paddingRight={1} paddingTop={0} paddingBottom={0} flexDirection="row" gap={1}>
+					<text fg={theme.muted}>{props.imageAttachments.length} image{props.imageAttachments.length === 1 ? "" : "s"}</text>
+					<For each={props.imageAttachments}>
+						{(attachment) => (
+							<box backgroundColor={theme.panelAlt} paddingLeft={1} paddingRight={1} onMouseUp={() => props.onRemoveImageAttachment(attachment.id)}>
+								<text fg={theme.accent}>{truncateText(attachment.label, 24)}</text>
+							</box>
+						)}
+					</For>
+					<box paddingLeft={1} paddingRight={1} onMouseUp={props.onClearImageAttachments}>
+						<text fg={theme.warning}>clear</text>
+					</box>
+				</box>
+			</Show>
 			<box backgroundColor={theme.panelAlt} paddingLeft={0} paddingRight={0} paddingTop={0} paddingBottom={0} flexDirection="row" gap={0} onMouseUp={props.onFocus}>
 				<box flexGrow={1} minWidth={0}>
 					<input
@@ -209,6 +236,14 @@ export function ChatComposer(props: {
 				>
 					<text fg={modeForegroundColor(props.modeTone)}>{truncateText(props.modeLabel, 12)}</text>
 				</box>
+			</box>
+			<box backgroundColor={theme.panelAlt} paddingLeft={1} paddingRight={1} paddingTop={0} paddingBottom={0} flexDirection="row" justifyContent="space-between" gap={1}>
+				<text fg={theme.muted}>
+					{props.imageAttachments.length > 0
+						? `${props.imageAttachments.length} image${props.imageAttachments.length === 1 ? "" : "s"} ready to send`
+						: "Type / or ask"}
+				</text>
+				<text fg={theme.muted}>{pasteImageHintLabel()}</text>
 			</box>
 		</box>
 	);
@@ -359,4 +394,15 @@ function modeForegroundColor(tone: ShellModeTone): string {
 		case "muted":
 			return theme.text;
 	}
+}
+
+function isPasteImageKey(evt: { name: string; ctrl?: boolean; meta?: boolean }): boolean {
+	if (evt.name !== "v") {
+		return false;
+	}
+	return process.platform === "win32" ? Boolean(evt.meta) : Boolean(evt.ctrl);
+}
+
+function pasteImageHintLabel(): string {
+	return process.platform === "win32" ? "Alt+V paste image" : "Ctrl+V paste image";
 }

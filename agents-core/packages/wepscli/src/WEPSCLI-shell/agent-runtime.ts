@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import type { AgentSession, AgentSessionEvent, AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
-import type { Model } from "@mariozechner/pi-ai";
+import type { ImageContent, Model } from "@mariozechner/pi-ai";
 import { getAgentDir } from "../config.js";
 import type { DiscoveredModel, ProviderProfile, ProviderProfileService } from "../provider-profiles/index.js";
 import { handleAgentSessionEvent } from "./agent-runtime-events.js";
@@ -9,6 +9,7 @@ import {
 	createMessageId,
 	extractAssistantReasoning,
 	extractAssistantVisibleText,
+	extractUserImages,
 	extractUserText,
 	formatCompactionResultMessage,
 	formatRuntimeError,
@@ -70,6 +71,7 @@ export class WepsAgentRuntime {
 		sessionId: string,
 		text: string,
 		selection: RuntimeSelection,
+		images: ImageContent[] = [],
 		binding: RuntimeSessionBinding = {},
 	): Promise<void> {
 		const record = await this.ensureSession(sessionId, selection, binding);
@@ -77,7 +79,15 @@ export class WepsAgentRuntime {
 		this.setRuntimeState(sessionId, record, createRunningRuntimeState());
 		try {
 			await this.applySelection(record, selection);
-			await record.session.prompt(text, record.session.isStreaming ? { streamingBehavior: "steer" } : undefined);
+			const promptOptions = record.session.isStreaming
+				? {
+						streamingBehavior: "steer" as const,
+						...(images.length > 0 ? { images } : {}),
+					}
+				: images.length > 0
+					? { images }
+					: undefined;
+			await record.session.prompt(text, promptOptions);
 		} catch (error) {
 			if (!this.isAbortLikeError(error)) {
 				const message = formatRuntimeError(error);
@@ -349,12 +359,14 @@ export class WepsAgentRuntime {
 		for (const message of record.session.state.messages) {
 			if (message.role === "user") {
 				const text = extractUserText(message);
-				if (!text) continue;
+				const images = extractUserImages(message);
+				if (!text && images.length === 0) continue;
 				restored.push({
 					id: createMessageId(record, "user"),
 					role: "user",
 					content: text,
 					time: formatTime(message.timestamp),
+					images,
 				});
 				continue;
 			}
