@@ -1,5 +1,6 @@
 export const BRIDGE_CHANNELS = {
 	getSnapshot: "wepsdesktop:get-snapshot",
+	getWindowState: "wepsdesktop:get-window-state",
 	activateWorkspace: "wepsdesktop:activate-workspace",
 	chooseWorkspaceDirectory: "wepsdesktop:choose-workspace-directory",
 	createProviderProfile: "wepsdesktop:create-provider-profile",
@@ -12,6 +13,10 @@ export const BRIDGE_CHANNELS = {
 	setActiveSelection: "wepsdesktop:set-active-selection",
 	abortSession: "wepsdesktop:abort-session",
 	snapshotUpdated: "wepsdesktop:snapshot-updated",
+	windowMinimize: "wepsdesktop:window-minimize",
+	windowToggleMaximize: "wepsdesktop:window-toggle-maximize",
+	windowClose: "wepsdesktop:window-close",
+	windowStateUpdated: "wepsdesktop:window-state-updated",
 } as const;
 
 export interface DesktopAppContext {
@@ -25,6 +30,11 @@ export interface DesktopAppContext {
 		electron: string;
 		node: string;
 	};
+}
+
+export interface DesktopWindowState {
+	isFullScreen: boolean;
+	isMaximized: boolean;
 }
 
 export type DesktopProviderFamily = "openai" | "anthropic";
@@ -175,13 +185,19 @@ export interface DesktopSnapshotListener {
 	(snapshot: DesktopSnapshot): void;
 }
 
+export interface DesktopWindowStateListener {
+	(state: DesktopWindowState): void;
+}
+
 export interface WepsDesktopBridge {
 	getSnapshot(): Promise<DesktopSnapshot>;
+	getWindowState(): Promise<DesktopWindowState>;
 	activateWorkspace(workspacePath: string): Promise<DesktopSnapshot>;
 	chooseWorkspaceDirectory(): Promise<string | null>;
 	createProviderProfile(input: CreateDesktopProviderProfileInput): Promise<DesktopSnapshot>;
 	createSession(): Promise<DesktopSnapshot>;
 	onSnapshot(listener: DesktopSnapshotListener): () => void;
+	onWindowState(listener: DesktopWindowStateListener): () => void;
 	openExternal(url: string): Promise<void>;
 	openSession(sessionId: string): Promise<DesktopSnapshot>;
 	refreshProviderModels(profileId: string): Promise<DesktopSnapshot>;
@@ -189,4 +205,7 @@ export interface WepsDesktopBridge {
 	sendPrompt(sessionId: string, text: string): Promise<void>;
 	setActiveSelection(profileId: string, modelId?: string): Promise<DesktopSnapshot>;
 	abortSession(sessionId: string): Promise<DesktopSnapshot>;
+	minimizeWindow(): Promise<DesktopWindowState>;
+	toggleMaximizeWindow(): Promise<DesktopWindowState>;
+	closeWindow(): Promise<void>;
 }

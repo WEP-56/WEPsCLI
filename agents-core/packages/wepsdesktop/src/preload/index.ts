@@ -5,11 +5,14 @@ import {
 	type DesktopSnapshot,
 	type DesktopSnapshotListener,
 	type DesktopToolApprovalDecision,
+	type DesktopWindowState,
+	type DesktopWindowStateListener,
 	type WepsDesktopBridge,
 } from "../shared/bridge.js";
 
 const bridge: WepsDesktopBridge = {
 	getSnapshot: () => ipcRenderer.invoke(BRIDGE_CHANNELS.getSnapshot) as Promise<DesktopSnapshot>,
+	getWindowState: () => ipcRenderer.invoke(BRIDGE_CHANNELS.getWindowState) as Promise<DesktopWindowState>,
 	activateWorkspace: (workspacePath: string) =>
 		ipcRenderer.invoke(BRIDGE_CHANNELS.activateWorkspace, workspacePath) as Promise<DesktopSnapshot>,
 	chooseWorkspaceDirectory: () =>
@@ -26,6 +29,15 @@ const bridge: WepsDesktopBridge = {
 			ipcRenderer.off(BRIDGE_CHANNELS.snapshotUpdated, wrapped);
 		};
 	},
+	onWindowState: (listener: DesktopWindowStateListener) => {
+		const wrapped = (_event: Electron.IpcRendererEvent, state: DesktopWindowState) => {
+			listener(state);
+		};
+		ipcRenderer.on(BRIDGE_CHANNELS.windowStateUpdated, wrapped);
+		return () => {
+			ipcRenderer.off(BRIDGE_CHANNELS.windowStateUpdated, wrapped);
+		};
+	},
 	openExternal: (url: string) => ipcRenderer.invoke(BRIDGE_CHANNELS.openExternal, url) as Promise<void>,
 	openSession: (sessionId: string) =>
 		ipcRenderer.invoke(BRIDGE_CHANNELS.openSession, sessionId) as Promise<DesktopSnapshot>,
@@ -39,6 +51,10 @@ const bridge: WepsDesktopBridge = {
 		ipcRenderer.invoke(BRIDGE_CHANNELS.setActiveSelection, profileId, modelId) as Promise<DesktopSnapshot>,
 	abortSession: (sessionId: string) =>
 		ipcRenderer.invoke(BRIDGE_CHANNELS.abortSession, sessionId) as Promise<DesktopSnapshot>,
+	minimizeWindow: () => ipcRenderer.invoke(BRIDGE_CHANNELS.windowMinimize) as Promise<DesktopWindowState>,
+	toggleMaximizeWindow: () =>
+		ipcRenderer.invoke(BRIDGE_CHANNELS.windowToggleMaximize) as Promise<DesktopWindowState>,
+	closeWindow: () => ipcRenderer.invoke(BRIDGE_CHANNELS.windowClose) as Promise<void>,
 };
 
 contextBridge.exposeInMainWorld("wepsDesktop", bridge);

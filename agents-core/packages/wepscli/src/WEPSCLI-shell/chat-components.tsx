@@ -237,14 +237,6 @@ export function ChatComposer(props: {
 					<text fg={modeForegroundColor(props.modeTone)}>{truncateText(props.modeLabel, 12)}</text>
 				</box>
 			</box>
-			<box backgroundColor={theme.panelAlt} paddingLeft={1} paddingRight={1} paddingTop={0} paddingBottom={0} flexDirection="row" justifyContent="space-between" gap={1}>
-				<text fg={theme.muted}>
-					{props.imageAttachments.length > 0
-						? `${props.imageAttachments.length} image${props.imageAttachments.length === 1 ? "" : "s"} ready to send`
-						: "Type / or ask"}
-				</text>
-				<text fg={theme.muted}>{pasteImageHintLabel()}</text>
-			</box>
 		</box>
 	);
 }
@@ -403,6 +395,3 @@ function isPasteImageKey(evt: { name: string; ctrl?: boolean; meta?: boolean }):
 	return process.platform === "win32" ? Boolean(evt.meta) : Boolean(evt.ctrl);
 }
 
-function pasteImageHintLabel(): string {
-	return process.platform === "win32" ? "Alt+V paste image" : "Ctrl+V paste image";
-}

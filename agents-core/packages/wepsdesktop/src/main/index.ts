@@ -6,6 +6,7 @@ import {
 	type CreateDesktopProviderProfileInput,
 	type DesktopAppContext,
 	type DesktopToolApprovalDecision,
+	type DesktopWindowState,
 } from "../shared/bridge.js";
 import { DesktopController } from "./desktop-controller.js";
 
@@ -67,6 +68,20 @@ function emitSnapshot(): void {
 	mainWindow.webContents.send(BRIDGE_CHANNELS.snapshotUpdated, controller.getSnapshot());
 }
 
+function getWindowState(window: BrowserWindow): DesktopWindowState {
+	return {
+		isFullScreen: window.isFullScreen(),
+		isMaximized: window.isMaximized(),
+	};
+}
+
+function emitWindowState(): void {
+	if (!mainWindow || mainWindow.isDestroyed()) {
+		return;
+	}
+	mainWindow.webContents.send(BRIDGE_CHANNELS.windowStateUpdated, getWindowState(mainWindow));
+}
+
 async function createMainWindow(): Promise<BrowserWindow> {
 	const window = new BrowserWindow({
 		width: 1480,
@@ -74,7 +89,8 @@ async function createMainWindow(): Promise<BrowserWindow> {
 		minWidth: 1180,
 		minHeight: 760,
 		title: "WEPS Desktop",
-		backgroundColor: "#09111f",
+		frame: false,
+		backgroundColor: "#0f0f0f",
 		autoHideMenuBar: true,
 		webPreferences: {
 			preload: preloadPath,
@@ -100,12 +116,25 @@ async function createMainWindow(): Promise<BrowserWindow> {
 		event.preventDefault();
 		void handleOpenExternal(url).catch(() => {});
 	});
+
+	window.on("maximize", () => emitWindowState());
+	window.on("unmaximize", () => emitWindowState());
+	window.on("enter-full-screen", () => emitWindowState());
+	window.on("leave-full-screen", () => emitWindowState());
 	return window;
 }
 
 function registerIpcHandlers(): void {
 	ipcMain.removeHandler(BRIDGE_CHANNELS.getSnapshot);
 	ipcMain.handle(BRIDGE_CHANNELS.getSnapshot, () => controller?.getSnapshot());
+
+	ipcMain.removeHandler(BRIDGE_CHANNELS.getWindowState);
+	ipcMain.handle(BRIDGE_CHANNELS.getWindowState, () => {
+		if (!mainWindow) {
+			throw new Error("Main window is not available.");
+		}
+		return getWindowState(mainWindow);
+	});
 
 	ipcMain.removeHandler(BRIDGE_CHANNELS.activateWorkspace);
 	ipcMain.handle(BRIDGE_CHANNELS.activateWorkspace, async (_event, workspacePath: string) =>
@@ -160,6 +189,36 @@ function registerIpcHandlers(): void {
 	ipcMain.handle(BRIDGE_CHANNELS.abortSession, async (_event, sessionId: string) =>
 		controller?.abortSession(sessionId),
 	);
+
+	ipcMain.removeHandler(BRIDGE_CHANNELS.windowMinimize);
+	ipcMain.handle(BRIDGE_CHANNELS.windowMinimize, async () => {
+		if (!mainWindow) {
+			throw new Error("Main window is not available.");
+		}
+		mainWindow.minimize();
+		return getWindowState(mainWindow);
+	});
+
+	ipcMain.removeHandler(BRIDGE_CHANNELS.windowToggleMaximize);
+	ipcMain.handle(BRIDGE_CHANNELS.windowToggleMaximize, async () => {
+		if (!mainWindow) {
+			throw new Error("Main window is not available.");
+		}
+		if (mainWindow.isMaximized()) {
+			mainWindow.unmaximize();
+		} else {
+			mainWindow.maximize();
+		}
+		return getWindowState(mainWindow);
+	});
+
+	ipcMain.removeHandler(BRIDGE_CHANNELS.windowClose);
+	ipcMain.handle(BRIDGE_CHANNELS.windowClose, async () => {
+		if (!mainWindow) {
+			throw new Error("Main window is not available.");
+		}
+		mainWindow.close();
+	});
 }
 
 app.setName("WEPS Desktop");
@@ -174,11 +233,17 @@ app.whenReady()
 		registerIpcHandlers();
 		mainWindow = await createMainWindow();
 		await loadWindowContent(mainWindow);
+		mainWindow.webContents.once("did-finish-load", () => {
+			emitWindowState();
+		});
 
 		app.on("activate", async () => {
 			if (BrowserWindow.getAllWindows().length === 0) {
 				mainWindow = await createMainWindow();
 				await loadWindowContent(mainWindow);
+				mainWindow.webContents.once("did-finish-load", () => {
+					emitWindowState();
+				});
 			}
 		});
 	})
