@@ -43,6 +43,18 @@ type RuntimeClient = {
 	unsubscribe: () => void;
 };
 
+type DeferredMessageContent = {
+	content: string;
+	version: number;
+	lineCount: number;
+};
+
+const SNAPSHOT_BROADCAST_INTERVAL_MS = 80;
+const PREVIEW_LINES = 2;
+const PREVIEW_CHARS = 280;
+const LONG_MESSAGE_MIN_LINES = 12;
+const LONG_MESSAGE_MIN_CHARS = 720;
+
 function truncate(value: string, maxLength: number): string {
 	const normalized = value.trim();
 	if (normalized.length <= maxLength) {
@@ -56,6 +68,37 @@ function formatTime(timestamp?: number): string {
 		hour: "2-digit",
 		minute: "2-digit",
 	});
+}
+
+function countLines(value: string): number {
+	return value.split(/\r?\n/).length;
+}
+
+function buildPreviewText(value: string): { preview: string; lineCount: number; truncated: boolean } {
+	const normalized = value.trim();
+	if (!normalized) {
+		return {
+			preview: "",
+			lineCount: 0,
+			truncated: false,
+		};
+	}
+
+	const lines = normalized.split(/\r?\n/);
+	const previewLines = lines.slice(0, PREVIEW_LINES);
+	let preview = previewLines.join("\n");
+	let truncated = lines.length > PREVIEW_LINES;
+
+	if (preview.length > PREVIEW_CHARS) {
+		preview = `${preview.slice(0, PREVIEW_CHARS - 1).trimEnd()}…`;
+		truncated = true;
+	}
+
+	return {
+		preview,
+		lineCount: lines.length,
+		truncated,
+	};
 }
 
 function guessReasoningSupport(modelId: string): boolean {
@@ -251,6 +294,16 @@ function toErrorRuntimeState(detail: string): DesktopRuntimeState {
 	};
 }
 
+function runtimeStatesEqual(left: DesktopRuntimeState, right: DesktopRuntimeState): boolean {
+	return (
+		left.phase === right.phase &&
+		left.label === right.label &&
+		left.detail === right.detail &&
+		left.interruptible === right.interruptible &&
+		left.canContinue === right.canContinue
+	);
+}
+
 function toSelection(profile?: ProviderProfile, modelId?: string): DesktopSelection {
 	return {
 		profileId: profile?.id,
@@ -269,6 +322,11 @@ export class DesktopController {
 	private runtimeClient?: RuntimeClient;
 	private runtimeState: DesktopRuntimeState = toIdleRuntimeState("Choose a workspace");
 	private messages: DesktopChatMessage[] = [];
+	private nextMessageId = 0;
+	private streamingMessageId?: string;
+	private deferredMessageContent = new Map<string, DeferredMessageContent>();
+	private snapshotBroadcastTimer?: NodeJS.Timeout;
+	private lastSnapshotBroadcastAt = 0;
 
 	constructor(
 		private readonly appContext: DesktopAppContext,
@@ -291,11 +349,24 @@ export class DesktopController {
 		return this.buildSnapshot();
 	}
 
+	getMessageContent(sessionId: string, messageId: string): string | null {
+		if (this.activeSessionId !== sessionId) {
+			return null;
+		}
+
+		const deferred = this.deferredMessageContent.get(messageId);
+		if (deferred) {
+			return deferred.content;
+		}
+
+		return this.messages.find((message) => message.id === messageId)?.content ?? null;
+	}
+
 	async activateWorkspace(workspacePath: string): Promise<DesktopSnapshot> {
 		this.workspaceStore.rememberWorkspace(workspacePath);
 		this.currentWorkspacePath = workspacePath;
 		this.activeSessionId = undefined;
-		this.messages = [];
+		this.resetTranscriptState();
 		this.disposeRuntimeClient();
 		this.runtimeState = this.computeUnavailableRuntimeState();
 
@@ -450,7 +521,7 @@ export class DesktopController {
 		this.workspaceStore.clearCurrentWorkspace();
 		this.currentWorkspacePath = undefined;
 		this.activeSessionId = undefined;
-		this.messages = [];
+		this.resetTranscriptState();
 		this.disposeRuntimeClient();
 		this.runtimeState = toIdleRuntimeState("Choose a workspace");
 		return this.broadcastSnapshot();
@@ -458,6 +529,10 @@ export class DesktopController {
 
 	dispose(): void {
 		this.unsubscribeSessionHistory();
+		if (this.snapshotBroadcastTimer) {
+			clearTimeout(this.snapshotBroadcastTimer);
+			this.snapshotBroadcastTimer = undefined;
+		}
 		this.disposeRuntimeClient();
 	}
 
@@ -470,7 +545,7 @@ export class DesktopController {
 				: toIdleRuntimeState("Choose a workspace");
 		}
 
-		this.broadcastSnapshot();
+		this.scheduleSnapshotBroadcast();
 	}
 
 	private async handleSessionRemoved(sessionId: string): Promise<void> {
@@ -480,7 +555,6 @@ export class DesktopController {
 
 		this.disposeRuntimeClient();
 		this.activeSessionId = undefined;
-		this.messages = [];
 
 		if (!this.currentWorkspacePath) {
 			this.runtimeState = toIdleRuntimeState("Choose a workspace");
@@ -524,7 +598,7 @@ export class DesktopController {
 
 		return {
 			record: toDesktopSessionRecord(record),
-			messages: this.messages,
+			messages: this.materializeSnapshotMessages(),
 			runtimeState: this.runtimeState,
 			selection: {
 				profileId: record.providerProfileId ?? this.resolveSelection().profileId,
@@ -534,9 +608,97 @@ export class DesktopController {
 	}
 
 	private broadcastSnapshot(): DesktopSnapshot {
+		if (this.snapshotBroadcastTimer) {
+			clearTimeout(this.snapshotBroadcastTimer);
+			this.snapshotBroadcastTimer = undefined;
+		}
+
 		const snapshot = this.buildSnapshot();
+		this.lastSnapshotBroadcastAt = Date.now();
 		this.emitSnapshot(snapshot);
 		return snapshot;
+	}
+
+	private scheduleSnapshotBroadcast(): void {
+		if (this.snapshotBroadcastTimer) {
+			return;
+		}
+
+		const elapsed = Date.now() - this.lastSnapshotBroadcastAt;
+		const delay = Math.max(0, SNAPSHOT_BROADCAST_INTERVAL_MS - elapsed);
+		this.snapshotBroadcastTimer = setTimeout(() => {
+			this.snapshotBroadcastTimer = undefined;
+			const snapshot = this.buildSnapshot();
+			this.lastSnapshotBroadcastAt = Date.now();
+			this.emitSnapshot(snapshot);
+		}, delay);
+	}
+
+	private shouldDeferMessageContent(message: DesktopChatMessage): boolean {
+		if (message.kind === "reasoning" || message.kind === "tool") {
+			return true;
+		}
+
+		if (message.role !== "assistant" || message.kind !== "default") {
+			return false;
+		}
+
+		const normalized = message.content.trim();
+		return countLines(normalized) >= LONG_MESSAGE_MIN_LINES || normalized.length >= LONG_MESSAGE_MIN_CHARS;
+	}
+
+	private materializeSnapshotMessages(): DesktopChatMessage[] {
+		const activeMessageIds = new Set<string>();
+		const snapshotMessages = this.messages.map((message) => {
+			activeMessageIds.add(message.id);
+			if (!this.shouldDeferMessageContent(message)) {
+				this.deferredMessageContent.delete(message.id);
+				return {
+					...message,
+					lineCount: countLines(message.content),
+					contentTruncated: false,
+					fullContentAvailable: false,
+					contentVersion: undefined,
+				};
+			}
+
+			const preview = buildPreviewText(message.content);
+			if (!preview.truncated) {
+				this.deferredMessageContent.delete(message.id);
+				return {
+					...message,
+					lineCount: preview.lineCount,
+					contentTruncated: false,
+					fullContentAvailable: false,
+					contentVersion: undefined,
+				};
+			}
+
+			const existing = this.deferredMessageContent.get(message.id);
+			const version = existing && existing.content === message.content ? existing.version : (existing?.version ?? 0) + 1;
+			this.deferredMessageContent.set(message.id, {
+				content: message.content,
+				version,
+				lineCount: preview.lineCount,
+			});
+
+			return {
+				...message,
+				content: preview.preview,
+				lineCount: preview.lineCount,
+				contentTruncated: true,
+				fullContentAvailable: true,
+				contentVersion: version,
+			};
+		});
+
+		for (const messageId of this.deferredMessageContent.keys()) {
+			if (!activeMessageIds.has(messageId)) {
+				this.deferredMessageContent.delete(messageId);
+			}
+		}
+
+		return snapshotMessages;
 	}
 
 	private resolveSelection(): DesktopSelection {
@@ -644,7 +806,7 @@ export class DesktopController {
 			unsubscribe,
 		};
 
-		this.messages = this.buildTranscript(session.state.messages, session.state.streamMessage);
+		this.hydrateTranscript(session.state.messages, session.state.streamMessage);
 		this.runtimeState = this.deriveRuntimeState(session);
 		return this.runtimeClient;
 	}
@@ -658,7 +820,7 @@ export class DesktopController {
 		void this.runtimeClient.session.abort().catch(() => {});
 		this.runtimeClient.session.dispose();
 		this.runtimeClient = undefined;
-		this.messages = [];
+		this.resetTranscriptState();
 	}
 
 	private registerProvider(
@@ -726,15 +888,35 @@ export class DesktopController {
 		}
 	}
 
-	private handleRuntimeEvent(_event: AgentSessionEvent, sessionId: string, session: AgentSession): void {
+	private handleRuntimeEvent(event: AgentSessionEvent, sessionId: string, session: AgentSession): void {
 		if (this.activeSessionId !== sessionId) {
 			return;
 		}
 
-		this.messages = this.buildTranscript(session.state.messages, session.state.streamMessage);
-		this.runtimeState = this.deriveRuntimeState(session);
-		this.syncSessionMetadata();
-		this.broadcastSnapshot();
+		let transcriptChanged = false;
+		switch (event.type) {
+			case "message_start":
+			case "message_update":
+				transcriptChanged = event.message.role === "assistant" ? this.syncStreamingAssistantMessage(event.message) : false;
+				break;
+			case "message_end":
+				transcriptChanged = this.appendCommittedMessage(event.message);
+				break;
+			default:
+				break;
+		}
+
+		const nextRuntimeState = this.deriveRuntimeState(session);
+		const runtimeChanged = !runtimeStatesEqual(this.runtimeState, nextRuntimeState);
+		if (!transcriptChanged && !runtimeChanged) {
+			return;
+		}
+
+		this.runtimeState = nextRuntimeState;
+		if (event.type === "message_end") {
+			this.syncSessionMetadata();
+		}
+		this.scheduleSnapshotBroadcast();
 	}
 
 	private deriveRuntimeState(session: AgentSession): DesktopRuntimeState {
@@ -745,6 +927,147 @@ export class DesktopController {
 			return toRunningRuntimeState("Running");
 		}
 		return toIdleRuntimeState("Ready");
+	}
+
+	private resetTranscriptState(): void {
+		this.messages = [];
+		this.nextMessageId = 0;
+		this.streamingMessageId = undefined;
+		this.deferredMessageContent.clear();
+	}
+
+	private hydrateTranscript(messages: AgentMessage[], streamMessage: AgentMessage | null): void {
+		const transcript = this.buildTranscript(messages, streamMessage);
+		this.messages = transcript;
+		this.nextMessageId = transcript.reduce((maxId, message) => {
+			const value = Number(message.id.split(":").pop());
+			return Number.isFinite(value) ? Math.max(maxId, value) : maxId;
+		}, 0);
+		const hasStreamingAssistant = streamMessage?.role === "assistant" && extractAssistantVisibleText(streamMessage).trim().length > 0;
+		this.streamingMessageId = hasStreamingAssistant ? transcript[transcript.length - 1]?.id : undefined;
+	}
+
+	private createDesktopMessage(
+		role: DesktopChatMessage["role"],
+		content: string,
+		kind: DesktopChatMessage["kind"],
+		timestamp?: number,
+	): DesktopChatMessage | undefined {
+		const normalized = content.trim();
+		if (!normalized) {
+			return undefined;
+		}
+
+		this.nextMessageId += 1;
+		return {
+			id: `desktop:${this.nextMessageId}`,
+			role,
+			content: normalized,
+			time: formatTime(timestamp),
+			kind,
+		};
+	}
+
+	private trimTranscript(messages: DesktopChatMessage[]): DesktopChatMessage[] {
+		return messages.slice(-200);
+	}
+
+	private clearStreamingAssistantMessage(): boolean {
+		if (!this.streamingMessageId) {
+			return false;
+		}
+
+		const nextMessages = this.messages.filter((message) => message.id !== this.streamingMessageId);
+		const changed = nextMessages.length !== this.messages.length;
+		this.messages = nextMessages;
+		this.streamingMessageId = undefined;
+		return changed;
+	}
+
+	private syncStreamingAssistantMessage(message: AgentMessage): boolean {
+		if (message.role !== "assistant") {
+			return false;
+		}
+
+		const content = extractAssistantVisibleText(message);
+		const normalized = content.trim();
+		if (!normalized) {
+			return this.clearStreamingAssistantMessage();
+		}
+
+		if (!this.streamingMessageId) {
+			const entry = this.createDesktopMessage("assistant", normalized, "default", message.timestamp);
+			if (!entry) {
+				return false;
+			}
+
+			this.messages = this.trimTranscript([...this.messages, entry]);
+			this.streamingMessageId = entry.id;
+			return true;
+		}
+
+		const index = this.messages.findIndex((entry) => entry.id === this.streamingMessageId);
+		if (index === -1) {
+			this.streamingMessageId = undefined;
+			return this.syncStreamingAssistantMessage(message);
+		}
+
+		const nextTime = formatTime(message.timestamp);
+		const existing = this.messages[index]!;
+		if (existing.content === normalized && existing.time === nextTime) {
+			return false;
+		}
+
+		const nextMessages = this.messages.slice();
+		nextMessages[index] = {
+			...existing,
+			content: normalized,
+			time: nextTime,
+		};
+		this.messages = nextMessages;
+		return true;
+	}
+
+	private appendCommittedMessage(message: AgentMessage): boolean {
+		const removedStreamingMessage = this.clearStreamingAssistantMessage();
+		const nextEntries: DesktopChatMessage[] = [];
+		const pushEntry = (
+			role: DesktopChatMessage["role"],
+			content: string,
+			kind: DesktopChatMessage["kind"],
+			timestamp?: number,
+		) => {
+			const entry = this.createDesktopMessage(role, content, kind, timestamp);
+			if (entry) {
+				nextEntries.push(entry);
+			}
+		};
+
+		if (message.role === "user") {
+			pushEntry("user", extractUserText(message), "default", message.timestamp);
+		}
+
+		if (message.role === "assistant") {
+			pushEntry("assistant", extractAssistantReasoning(message), "reasoning", message.timestamp);
+			pushEntry("assistant", extractAssistantVisibleText(message), "default", message.timestamp);
+		}
+
+		if (message.role === "toolResult") {
+			const body = extractToolResultText(message);
+			pushEntry(
+				"system",
+				[`Tool ${message.toolName}`, body || "No output."].filter(Boolean).join("\n\n"),
+				"tool",
+				message.timestamp,
+			);
+		}
+
+		if (nextEntries.length === 0) {
+			return removedStreamingMessage;
+		}
+
+		this.messages = this.trimTranscript([...this.messages, ...nextEntries]);
+		return true;
 	}
 
 	private buildTranscript(messages: AgentMessage[], streamMessage: AgentMessage | null): DesktopChatMessage[] {
@@ -811,15 +1134,37 @@ export class DesktopController {
 
 		const selection = this.resolveSelection();
 		const profile = selection.profileId ? this.profileService.getProfile(selection.profileId) : undefined;
+		const nextTitle = deriveSessionTitle(this.messages, record.title);
+		const nextSummary = deriveSessionSummary(this.messages);
+		const nextWorkspacePath = this.currentWorkspacePath;
+		const nextProviderProfileId = selection.profileId;
+		const nextProviderLabel = profile?.label;
+		const nextModelId = selection.modelId;
+		const nextLastPrompt = latestPrompt(this.messages);
+		const nextRuntimeSessionFile = this.runtimeClient?.session.sessionManager.getSessionFile() ?? record.runtimeSessionFile;
+
+		if (
+			record.title === nextTitle &&
+			record.summary === nextSummary &&
+			record.workspacePath === nextWorkspacePath &&
+			record.providerProfileId === nextProviderProfileId &&
+			record.providerLabel === nextProviderLabel &&
+			record.modelId === nextModelId &&
+			record.lastPrompt === nextLastPrompt &&
+			record.runtimeSessionFile === nextRuntimeSessionFile
+		) {
+			return;
+		}
+
 		this.sessionService.updateSession(this.activeSessionId, {
-			title: deriveSessionTitle(this.messages, record.title),
-			summary: deriveSessionSummary(this.messages),
-			workspacePath: this.currentWorkspacePath,
-			providerProfileId: selection.profileId,
-			providerLabel: profile?.label,
-			modelId: selection.modelId,
-			lastPrompt: latestPrompt(this.messages),
-			runtimeSessionFile: this.runtimeClient?.session.sessionManager.getSessionFile() ?? record.runtimeSessionFile,
+			title: nextTitle,
+			summary: nextSummary,
+			workspacePath: nextWorkspacePath,
+			providerProfileId: nextProviderProfileId,
+			providerLabel: nextProviderLabel,
+			modelId: nextModelId,
+			lastPrompt: nextLastPrompt,
+			runtimeSessionFile: nextRuntimeSessionFile,
 		});
 	}
 }

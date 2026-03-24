@@ -16,6 +16,7 @@ const BRIDGE_CHANNELS = {
   sendPrompt: "wepsdesktop:send-prompt",
   setActiveSelection: "wepsdesktop:set-active-selection",
   abortSession: "wepsdesktop:abort-session",
+  getMessageContent: "wepsdesktop:get-message-content",
   snapshotUpdated: "wepsdesktop:snapshot-updated",
   windowMinimize: "wepsdesktop:window-minimize",
   windowToggleMaximize: "wepsdesktop:window-toggle-maximize",
@@ -57,6 +58,7 @@ const bridge = {
   sendPrompt: (sessionId, text) => ipcRenderer.invoke(BRIDGE_CHANNELS.sendPrompt, sessionId, text),
   setActiveSelection: (profileId, modelId) => ipcRenderer.invoke(BRIDGE_CHANNELS.setActiveSelection, profileId, modelId),
   abortSession: (sessionId) => ipcRenderer.invoke(BRIDGE_CHANNELS.abortSession, sessionId),
+  getMessageContent: (sessionId, messageId) => ipcRenderer.invoke(BRIDGE_CHANNELS.getMessageContent, sessionId, messageId),
   minimizeWindow: () => ipcRenderer.invoke(BRIDGE_CHANNELS.windowMinimize),
   toggleMaximizeWindow: () => ipcRenderer.invoke(BRIDGE_CHANNELS.windowToggleMaximize),
   closeWindow: () => ipcRenderer.invoke(BRIDGE_CHANNELS.windowClose)

@@ -1,4 +1,9 @@
+import DOMPurify from "dompurify";
 import { html, render, type TemplateResult } from "lit";
+import { live } from "lit/directives/live.js";
+import { repeat } from "lit/directives/repeat.js";
+import { unsafeHTML } from "lit/directives/unsafe-html.js";
+import { Marked } from "marked";
 import "./app.css";
 import type {
 	CreateDesktopProviderProfileInput,
@@ -26,6 +31,45 @@ type WorkspaceSummary = {
 	providerLabel?: string;
 };
 
+type CachedMessageContent = {
+	content: string;
+	version: number;
+};
+
+const markdownParser = new Marked({
+	gfm: true,
+	breaks: true,
+});
+const MARKDOWN_ALLOWED_TAGS = [
+	"a",
+	"blockquote",
+	"br",
+	"code",
+	"del",
+	"em",
+	"h1",
+	"h2",
+	"h3",
+	"h4",
+	"h5",
+	"h6",
+	"hr",
+	"input",
+	"li",
+	"ol",
+	"p",
+	"pre",
+	"strong",
+	"table",
+	"tbody",
+	"td",
+	"th",
+	"thead",
+	"tr",
+	"ul",
+] as const;
+const MARKDOWN_ALLOWED_ATTR = ["checked", "class", "disabled", "href", "rel", "start", "target", "title", "type"] as const;
+
 let snapshot: DesktopSnapshot | null = null;
 let unsubscribeSnapshot: (() => void) | undefined;
 let unsubscribeWindowState: (() => void) | undefined;
@@ -48,6 +92,17 @@ let providerDraft: ProviderDraft = {
 	baseUrl: "",
 	apiKey: "",
 };
+const LONG_ASSISTANT_MESSAGE_MIN_LINES = 12;
+const LONG_ASSISTANT_MESSAGE_MIN_CHARS = 720;
+const RENDER_THROTTLE_MS = 48;
+
+let messageExpansionOverrides = new Map<string, boolean>();
+let messageContentCache = new Map<string, CachedMessageContent>();
+let markdownRenderCache = new Map<string, string>();
+let pendingMessageContentRequests = new Map<string, Promise<void>>();
+let renderScheduled = false;
+let renderTimer: number | undefined;
+let lastRenderAt = 0;
 
 function getRoot(): HTMLElement {
 	const root = document.getElementById("app");
@@ -127,13 +182,41 @@ function setStatus(message: string): void {
 	}
 	statusTimer = window.setTimeout(() => {
 		statusMessage = "";
-		renderApp();
+		requestRender();
 	}, 3600);
+	requestRender();
+}
+
+function flushRender(): void {
+	renderScheduled = false;
+	renderTimer = undefined;
+	lastRenderAt = performance.now();
 	renderApp();
 }
 
+function scheduleRender(): void {
+	if (renderScheduled) {
+		return;
+	}
+
+	renderScheduled = true;
+	const delay = Math.max(0, RENDER_THROTTLE_MS - (performance.now() - lastRenderAt));
+	const scheduleFrame = () => {
+		window.requestAnimationFrame(() => {
+			flushRender();
+		});
+	};
+
+	if (delay === 0) {
+		scheduleFrame();
+		return;
+	}
+
+	renderTimer = window.setTimeout(scheduleFrame, delay);
+}
+
 function requestRender(): void {
-	renderApp();
+	scheduleRender();
 }
 
 function activeSession(): DesktopSessionSnapshot | undefined {
@@ -186,15 +269,6 @@ function workspaceSummaries(): WorkspaceSummary[] {
 			providerLabel: latestSession?.providerLabel,
 		};
 	});
-}
-
-function otherSessions(limit = 4): DesktopSessionRecord[] {
-	const currentId = activeSessionRecord()?.id;
-	return (snapshot?.sessions ?? []).filter((session) => session.id !== currentId).slice(0, limit);
-}
-
-function activeMessageCount(): number {
-	return activeSession()?.messages.length ?? 0;
 }
 
 function runtimeTone(phase?: DesktopRuntimeState["phase"]): string {
@@ -305,23 +379,254 @@ function messageBubbleTone(message: DesktopChatMessage): string {
 	return "message-bubble--assistant";
 }
 
-function sessionHeading(): string {
-	const session = activeSessionRecord();
-	if (session) {
-		return truncate(session.title || "未命名会话", 72);
-	}
-	return "开始一个新的桌面对话";
+function messageStateKey(sessionId: string, messageId: string): string {
+	return `${sessionId}:${messageId}`;
 }
 
-function sessionSummaryText(): string {
-	const session = activeSessionRecord();
-	if (session?.summary) {
-		return session.summary;
+function lineCount(value: string): number {
+	return value.split(/\r?\n/).length;
+}
+
+function isLongAssistantMessage(message: DesktopChatMessage): boolean {
+	if (message.role !== "assistant" || message.kind !== "default") {
+		return false;
 	}
-	if (session) {
-		return "继续这个会话，桌面端会保持与 WEPS CLI 的数据目录同步。";
+
+	const normalized = message.content.trim();
+	const totalLines = message.lineCount ?? lineCount(normalized);
+	return (
+		Boolean(message.contentTruncated) ||
+		totalLines >= LONG_ASSISTANT_MESSAGE_MIN_LINES ||
+		normalized.length >= LONG_ASSISTANT_MESSAGE_MIN_CHARS
+	);
+}
+
+function isMessageCollapsible(message: DesktopChatMessage): boolean {
+	return message.kind === "reasoning" || message.kind === "tool" || isLongAssistantMessage(message);
+}
+
+function defaultMessageExpanded(message: DesktopChatMessage): boolean {
+	return !isMessageCollapsible(message);
+}
+
+function messageCacheKey(sessionId: string, messageId: string): string {
+	return `${sessionId}:${messageId}`;
+}
+
+function hasDeferredMessageContent(message: DesktopChatMessage): boolean {
+	return message.fullContentAvailable === true;
+}
+
+function getCachedMessageContent(sessionId: string, message: DesktopChatMessage): string | undefined {
+	if (!hasDeferredMessageContent(message)) {
+		return message.content;
 	}
-	return "会话、Provider 和模型选择都继续复用 CLI 的共享数据，只重新整理交互和可视化。";
+
+	const cached = messageContentCache.get(messageCacheKey(sessionId, message.id));
+	if (!cached || cached.version !== message.contentVersion) {
+		return undefined;
+	}
+
+	return cached.content;
+}
+
+function ensureMessageContent(sessionId: string, message: DesktopChatMessage): void {
+	if (!hasDeferredMessageContent(message)) {
+		return;
+	}
+
+	const cacheKey = messageCacheKey(sessionId, message.id);
+	const cached = messageContentCache.get(cacheKey);
+	if (cached && cached.version === message.contentVersion) {
+		return;
+	}
+
+	if (pendingMessageContentRequests.has(cacheKey)) {
+		return;
+	}
+
+	const request = window.wepsDesktop
+		.getMessageContent(sessionId, message.id)
+		.then((content) => {
+			if (typeof content !== "string") {
+				return;
+			}
+			messageContentCache.set(cacheKey, {
+				content,
+				version: message.contentVersion ?? 0,
+			});
+			requestRender();
+		})
+		.catch((error) => {
+			setStatus(error instanceof Error ? error.message : String(error));
+		})
+		.finally(() => {
+			pendingMessageContentRequests.delete(cacheKey);
+		});
+
+	pendingMessageContentRequests.set(cacheKey, request);
+}
+
+function isMessageExpanded(sessionId: string, message: DesktopChatMessage): boolean {
+	if (!isMessageCollapsible(message)) {
+		return true;
+	}
+
+	const override = messageExpansionOverrides.get(messageStateKey(sessionId, message.id));
+	return override ?? defaultMessageExpanded(message);
+}
+
+function toggleMessageExpansion(sessionId: string, message: DesktopChatMessage): void {
+	if (!isMessageCollapsible(message)) {
+		return;
+	}
+
+	const nextExpanded = !isMessageExpanded(sessionId, message);
+	const key = messageStateKey(sessionId, message.id);
+	if (nextExpanded === defaultMessageExpanded(message)) {
+		messageExpansionOverrides.delete(key);
+	} else {
+		messageExpansionOverrides.set(key, nextExpanded);
+	}
+
+	if (nextExpanded) {
+		ensureMessageContent(sessionId, message);
+	}
+
+	requestRender();
+}
+
+function collapsedMessageTitle(message: DesktopChatMessage): string {
+	if (message.kind === "reasoning") {
+		return "思考";
+	}
+	if (message.kind === "tool") {
+		return "工具输出";
+	}
+	return "长回复";
+}
+
+function previewMessageContent(message: DesktopChatMessage): { text: string; lineCount: number; truncated: boolean } {
+	return {
+		text: message.content.trim() || "无可显示内容。",
+		lineCount: message.lineCount ?? lineCount(message.content),
+		truncated: Boolean(message.contentTruncated),
+	};
+}
+
+function shouldRenderMarkdown(message: DesktopChatMessage): boolean {
+	return message.role === "assistant" && message.kind === "default";
+}
+
+function canCopyOriginalMessage(message: DesktopChatMessage): boolean {
+	return message.role === "assistant" && message.kind !== "status";
+}
+
+function renderMarkdown(content: string): string {
+	const normalized = content.trim();
+	if (!normalized) {
+		return "<p>无可显示内容。</p>";
+	}
+
+	const cached = markdownRenderCache.get(normalized);
+	if (cached) {
+		return cached;
+	}
+
+	const parsed = markdownParser.parse(normalized, { async: false });
+	const sanitized = String(
+		DOMPurify.sanitize(parsed, {
+			ALLOWED_ATTR: [...MARKDOWN_ALLOWED_ATTR],
+			ALLOWED_TAGS: [...MARKDOWN_ALLOWED_TAGS],
+			ALLOW_DATA_ATTR: false,
+		}),
+	);
+	const documentFragment = new DOMParser().parseFromString(sanitized, "text/html");
+
+	for (const link of Array.from(documentFragment.body.querySelectorAll("a[href]"))) {
+		link.setAttribute("target", "_blank");
+		link.setAttribute("rel", "noreferrer noopener");
+	}
+
+	for (const checkbox of Array.from(documentFragment.body.querySelectorAll("input[type='checkbox']"))) {
+		checkbox.setAttribute("disabled", "");
+		checkbox.setAttribute("tabindex", "-1");
+	}
+
+	const htmlContent = documentFragment.body.innerHTML || "<p>无可显示内容。</p>";
+	markdownRenderCache.set(normalized, htmlContent);
+	return htmlContent;
+}
+
+function handleRenderedMarkdownClick(event: Event): void {
+	const target = event.target;
+	if (!(target instanceof Element)) {
+		return;
+	}
+
+	const link = target.closest("a[href]");
+	if (!(link instanceof HTMLAnchorElement)) {
+		return;
+	}
+
+	event.preventDefault();
+	void window.wepsDesktop.openExternal(link.href).catch((error) => {
+		setStatus(error instanceof Error ? error.message : String(error));
+	});
+}
+
+async function getRawMessageContent(sessionId: string, message: DesktopChatMessage): Promise<string> {
+	if (!hasDeferredMessageContent(message)) {
+		return message.content;
+	}
+
+	const cached = getCachedMessageContent(sessionId, message);
+	if (cached) {
+		return cached;
+	}
+
+	const content = await window.wepsDesktop.getMessageContent(sessionId, message.id);
+	if (typeof content === "string") {
+		messageContentCache.set(messageCacheKey(sessionId, message.id), {
+			content,
+			version: message.contentVersion ?? 0,
+		});
+		return content;
+	}
+
+	return message.content;
+}
+
+async function copyMessageOriginal(sessionId: string, message: DesktopChatMessage): Promise<void> {
+	try {
+		const content = await getRawMessageContent(sessionId, message);
+		let copied = false;
+		if (navigator.clipboard?.writeText) {
+			try {
+				await navigator.clipboard.writeText(content);
+				copied = true;
+			} catch {
+				copied = false;
+			}
+		}
+		if (!copied) {
+			const textarea = document.createElement("textarea");
+			textarea.value = content;
+			textarea.setAttribute("readonly", "true");
+			textarea.style.position = "fixed";
+			textarea.style.opacity = "0";
+			document.body.append(textarea);
+			textarea.select();
+			copied = document.execCommand("copy");
+			textarea.remove();
+			if (!copied) {
+				throw new Error("复制失败");
+			}
+		}
+		setStatus("已复制原文。");
+	} catch (error) {
+		setStatus(error instanceof Error ? error.message : String(error));
+	}
 }
 
 function openDetails(): void {
@@ -605,7 +910,7 @@ function renderWindowControls(): TemplateResult {
 }
 
 function renderTopbar(): TemplateResult {
-	const title = activeSessionRecord()?.title || basenamePath(snapshot?.currentWorkspacePath);
+	const runtimeState = activeRuntimeState();
 	return html`
 		<header class="topbar">
 			<div class="topbar__drag">
@@ -615,15 +920,18 @@ function renderTopbar(): TemplateResult {
 							<path stroke-linecap="round" stroke-linejoin="round" d="M3.75 5.75h16.5M3.75 12h16.5M3.75 18.25h10.5" />
 						</svg>
 					</button>
-					<span class="topbar__app">WEPS</span>
-				</div>
-				<div class="topbar__title">
-					<span class="topbar__eyebrow">Shared with WEPS CLI</span>
-					<strong>${truncate(title, 48)}</strong>
+					<div class="topbar__brand">
+						<span class="topbar__app">WEPS Desktop</span>
+						<span class="topbar__context">Shared with WEPS CLI</span>
+					</div>
 				</div>
 			</div>
 
 			<div class="topbar__actions">
+				<div class="topbar__status">
+					<span class="pill pill--tiny ${runtimeTone(runtimeState?.phase)}">${runtimeState?.label ?? "未启动"}</span>
+					<span class="topbar__meta">${activeProfile()?.label ?? "未配置 Provider"}</span>
+				</div>
 				${renderWindowControls()}
 			</div>
 		</header>
@@ -635,7 +943,10 @@ function renderLauncherTopbar(): TemplateResult {
 		<header class="topbar topbar--launcher">
 			<div class="topbar__drag">
 				<div class="topbar__left">
-					<span class="topbar__app">WEPS Desktop</span>
+					<div class="topbar__brand">
+						<span class="topbar__app">WEPS Desktop</span>
+						<span class="topbar__context">同步 CLI 的工作台视图</span>
+					</div>
 				</div>
 			</div>
 			<div class="topbar__actions">${renderWindowControls()}</div>
@@ -848,44 +1159,21 @@ function renderSessionNavItem(session: DesktopSessionRecord): TemplateResult {
 	`;
 }
 
-function renderPaneHeader(): TemplateResult {
-	const runtimeState = activeRuntimeState();
-	return html`
-		<header class="pane-toolbar">
-			<div class="pane-toolbar__primary">
-				<button class="pane-toolbar__selector" ?disabled=${isBusy} @click=${() => openDetails()}>
-					${activeModelName() ?? "选择模型"}
-				</button>
-				<span class="pane-toolbar__meta">${activeProfile()?.label ?? "未配置 Provider"}</span>
-				<span class="pane-toolbar__meta">${runtimeState?.label ?? "未启动"}</span>
-			</div>
-
-			<div class="pane-toolbar__actions">
-				<button class="button button--subtle button--small" ?disabled=${isBusy} @click=${() => void createSession()}>
-					新建
-				</button>
-				<button class="button button--subtle button--small" ?disabled=${isBusy} @click=${() => openDetails()}>
-					设置
-				</button>
-			</div>
-		</header>
-	`;
-}
-
 function renderConversationEmptyState(): TemplateResult {
 	const hasProfiles = (snapshot?.providerProfiles.length ?? 0) > 0;
 	return html`
 		<div class="empty-state empty-state--hero">
 			<div class="empty-state__mark">W</div>
-			<p class="eyebrow">${hasProfiles ? "准备开始" : "需要一个 Provider"}</p>
-			<h2>${activeModelName() ?? "WEPS Desktop"}</h2>
+			<p class="eyebrow">${hasProfiles ? "准备继续对话" : "需要先接入模型"}</p>
+			<h2>${hasProfiles ? "从左侧切换线程，或直接开始输入。" : "先添加一个 Provider"}</h2>
 			<p>
 				${hasProfiles
-					? `开始构建 ${basenamePath(snapshot?.currentWorkspacePath)}，可以从左侧选择线程，或直接在底部输入新的任务。`
+					? `这里现在就是纯聊天画布。会话、模型和工作区仍然沿用 CLI 的共享上下文，但不再打断你的阅读节奏。`
 					: "还没有可用的 Provider。打开设置后添加一个 OpenAI Compatible 或 Anthropic Compatible 配置。"}
 			</p>
 			<div class="empty-state__subline">
 				<span>${activeProfile()?.label ?? "未配置 Provider"}</span>
+				<span>${activeModelName() ?? "未选择模型"}</span>
 				<span>${snapshot?.sessions.length ?? 0} 个线程</span>
 			</div>
 		</div>
@@ -910,15 +1198,31 @@ function renderTranscriptSurface(): TemplateResult {
 								<p>从底部输入框发出第一条任务，runtime 会自动绑定到当前工作区并继续写入共享会话目录。</p>
 							</div>
 						`
-					: session.messages.map((message) => renderMessage(message))}
+					: repeat(
+							session.messages,
+							(message) => `${session.record.id}:${message.id}`,
+							(message) => renderMessage(session.record.id, message),
+						)}
 			</div>
 		</section>
 	`;
 }
 
-function renderMessage(message: DesktopChatMessage): TemplateResult {
+function renderMessage(sessionId: string, message: DesktopChatMessage): TemplateResult {
 	const isUser = message.role === "user";
-	const bubbleTone = messageBubbleTone(message);
+	const collapsible = isMessageCollapsible(message);
+	const expanded = isMessageExpanded(sessionId, message);
+	const preview = collapsible ? previewMessageContent(message) : undefined;
+	const fullContent = expanded ? getCachedMessageContent(sessionId, message) : undefined;
+	const renderAsMarkdown = shouldRenderMarkdown(message);
+	const bubbleTone = `${messageBubbleTone(message)}${collapsible ? " message-bubble--collapsible" : ""}${
+		collapsible && !expanded ? " message-bubble--collapsed" : ""
+	}`;
+
+	if (expanded && hasDeferredMessageContent(message) && !fullContent) {
+		ensureMessageContent(sessionId, message);
+	}
+
 	return html`
 		<article class="message-shell ${isUser ? "message-shell--user" : ""}">
 			<div class="message-shell__meta ${isUser ? "message-shell__meta--user" : ""}">
@@ -934,11 +1238,56 @@ function renderMessage(message: DesktopChatMessage): TemplateResult {
 				${isUser ? html`<span class="message-avatar message-avatar--user">${messageAvatarLabel(message)}</span>` : html``}
 			</div>
 			<div class="message-bubble ${bubbleTone}">
-				${message.kind && message.kind !== "default"
+				${!collapsible && message.kind && message.kind !== "default"
 					? html`<div class="message-bubble__eyebrow">${messageKindLabel(message)}</div>`
 					: html``}
-				<pre class="message-bubble__content">${message.content}</pre>
+				${collapsible
+					? html`
+							<div class="message-bubble__summary">
+								<div class="message-bubble__summary-copy">
+									<strong class="message-bubble__summary-title">${collapsedMessageTitle(message)}</strong>
+									<span class="message-bubble__summary-meta">
+										${preview?.lineCount ?? 0} 行${!expanded && preview?.truncated ? " · 已折叠" : ""}
+									</span>
+								</div>
+								<button
+									class="message-bubble__toggle"
+									type="button"
+									aria-expanded=${expanded ? "true" : "false"}
+									@click=${() => toggleMessageExpansion(sessionId, message)}
+								>
+									${expanded ? "收起" : "展开"}
+								</button>
+							</div>
+							${expanded
+								? fullContent
+									? renderAsMarkdown
+										? html`
+												<div class="message-bubble__markdown" @click=${(event: Event) => handleRenderedMarkdownClick(event)}>
+													${unsafeHTML(renderMarkdown(fullContent))}
+												</div>
+											`
+										: html`<pre class="message-bubble__content">${fullContent}</pre>`
+									: html`<pre class="message-bubble__preview">正在加载完整内容...</pre>`
+								: html`<pre class="message-bubble__preview">${preview?.text}</pre>`}
+						`
+					: renderAsMarkdown
+						? html`
+								<div class="message-bubble__markdown" @click=${(event: Event) => handleRenderedMarkdownClick(event)}>
+									${unsafeHTML(renderMarkdown(message.content))}
+								</div>
+							`
+						: html`<pre class="message-bubble__content">${message.content}</pre>`}
 			</div>
+			${canCopyOriginalMessage(message)
+				? html`
+						<div class="message-shell__actions">
+							<button class="message-shell__copy" type="button" @click=${() => void copyMessageOriginal(sessionId, message)}>
+								复制原文
+							</button>
+						</div>
+					`
+				: html``}
 		</article>
 	`;
 }
@@ -1069,7 +1418,7 @@ function renderComposer(): TemplateResult {
 			<textarea
 				class="composer__input"
 				placeholder="描述你希望在当前工作区里完成的任务。"
-				.value=${composerValue}
+				.value=${live(composerValue)}
 				@input=${(event: Event) => {
 					composerValue = (event.target as HTMLTextAreaElement).value;
 				}}
@@ -1096,13 +1445,14 @@ function renderComposer(): TemplateResult {
 						${composerMenuOpen === "provider" ? renderProviderMenu() : html``}
 					</div>
 					<span class="composer__caption">${runtimeState?.detail ?? runtimeState?.label ?? "未启动 runtime"}</span>
+					<span class="composer__shortcut">Ctrl / ⌘ + Enter 发送</span>
 				</div>
 				<div class="composer__actions">
 					<button class="button button--subtle" ?disabled=${isBusy || !canAbort} @click=${() => void abortSession()}>
 						中断
 					</button>
 					<button class="button button--primary" ?disabled=${isBusy} @click=${() => void sendPrompt()}>
-						发送
+						发送任务
 					</button>
 				</div>
 			</div>
@@ -1113,179 +1463,9 @@ function renderComposer(): TemplateResult {
 	`;
 }
 
-function renderSessionOverviewRailCard(): TemplateResult {
-	const session = activeSessionRecord();
-	const runtimeState = activeRuntimeState();
-	return html`
-		<section class="rail-card rail-card--accent">
-			<p class="eyebrow">${session ? "当前会话" : "工作区状态"}</p>
-			<h2>${session ? truncate(session.title || "未命名会话", 44) : basenamePath(snapshot?.currentWorkspacePath)}</h2>
-			<p class="rail-card__text">${session ? sessionSummaryText() : "先从一个提示词或新建会话开始。"}</p>
-
-			<div class="metric-grid">
-				<div class="metric">
-					<span>状态</span>
-					<strong>${runtimeState?.label ?? "未启动"}</strong>
-				</div>
-				<div class="metric">
-					<span>消息</span>
-					<strong>${activeMessageCount()}</strong>
-				</div>
-				<div class="metric">
-					<span>更新</span>
-					<strong>${formatRelativeTime(session?.updatedAt)}</strong>
-				</div>
-				<div class="metric">
-					<span>工作区</span>
-					<strong>${basenamePath(snapshot?.currentWorkspacePath)}</strong>
-				</div>
-			</div>
-
-			<div class="detail-list">
-				<div class="detail-list__row">
-					<span>Provider</span>
-					<span>${session?.providerLabel ?? activeProfile()?.label ?? "未配置"}</span>
-				</div>
-				<div class="detail-list__row">
-					<span>模型</span>
-					<span>${session?.modelId ?? activeModelName() ?? "未选择"}</span>
-				</div>
-				<div class="detail-list__row">
-					<span>创建于</span>
-					<span>${formatTimestamp(session?.createdAt)}</span>
-				</div>
-			</div>
-
-			<div class="rail-card__actions">
-				<button class="button button--primary" ?disabled=${isBusy} @click=${() => void createSession()}>
-					新建会话
-				</button>
-				<button class="button button--subtle" ?disabled=${isBusy} @click=${() => openDetails()}>
-					更多设置
-				</button>
-			</div>
-		</section>
-	`;
-}
-
-function renderInlineProviderCard(): TemplateResult {
-	const profile = activeProfile();
-	const profiles = snapshot?.providerProfiles ?? [];
-	return html`
-		<section class="rail-card">
-			<div class="section-head">
-				<h3>Provider</h3>
-				<button class="button button--subtle button--small" ?disabled=${isBusy || !profile} @click=${() => void refreshActiveProfile()}>
-					刷新模型
-				</button>
-			</div>
-
-			${profiles.length > 0
-				? html`
-						<div class="form-grid form-grid--stack">
-							<label class="field-label">
-								<span>当前 Provider</span>
-								<select
-									class="field-input"
-									?disabled=${isBusy}
-									@change=${(event: Event) => {
-										const target = event.target as HTMLSelectElement;
-										void setProfileSelection(target.value);
-									}}
-								>
-									${profiles.map(
-										(entry) => html`
-											<option value=${entry.id} ?selected=${snapshot?.activeSelection.profileId === entry.id}>
-												${entry.label}
-											</option>
-										`,
-									)}
-								</select>
-							</label>
-
-							<label class="field-label">
-								<span>当前模型</span>
-								<select
-									class="field-input"
-									?disabled=${isBusy || !profile || profile.models.length === 0}
-									@change=${(event: Event) => {
-										const target = event.target as HTMLSelectElement;
-										void setModelSelection(target.value);
-									}}
-								>
-									${profile?.models.map(
-										(model) => html`
-											<option value=${model.id} ?selected=${snapshot?.activeSelection.modelId === model.id}>
-												${model.name}
-											</option>
-										`,
-									)}
-								</select>
-							</label>
-						</div>
-						<div class="rail-note">
-							<span class="pill pill--tiny ${profile ? providerValidationTone(profile) : "is-muted"}">
-								${profile ? providerValidationLabel(profile) : "未校验"}
-							</span>
-							<span>${profile?.lastValidationMessage ?? "同步自 CLI 的共享 Provider 配置。"}</span>
-						</div>
-					`
-				: html`
-						<p class="panel-empty">还没有可用 Provider。打开设置后创建一个配置。</p>
-						<button class="button button--subtle button--full" ?disabled=${isBusy} @click=${() => openDetails()}>
-							去设置里添加
-						</button>
-					`}
-		</section>
-	`;
-}
-
-function renderRecentSessionsRailCard(): TemplateResult {
-	const recentSessions = otherSessions(5);
-	return html`
-		<section class="rail-card">
-			<div class="section-head">
-				<h3>最近会话</h3>
-				<span>${snapshot?.sessions.length ?? 0}</span>
-			</div>
-			<div class="compact-list">
-				${recentSessions.length > 0
-					? recentSessions.map(
-							(session) => html`
-								<button
-									class="compact-list__item compact-list__item--session"
-									?disabled=${isBusy}
-									@click=${() => {
-										void openSession(session.id);
-									}}
-								>
-									<strong>${truncate(session.title || "未命名会话", 36)}</strong>
-									<small>${truncate(session.summary || "等待新的任务。", 78)}</small>
-									<span class="compact-list__meta">
-										<span>${session.providerLabel ?? "未选 Provider"}</span>
-										<span>${formatRelativeTime(session.updatedAt)}</span>
-									</span>
-								</button>
-							`,
-						)
-					: html`<p class="panel-empty">会话历史接通后，这里会展示可快速切换的上下文。</p>`}
-			</div>
-		</section>
-	`;
-}
-
-function renderSessionRail(): TemplateResult {
-	return html`
-		<aside class="session-rail">
-			${renderSessionOverviewRailCard()} ${renderInlineProviderCard()} ${renderRecentSessionsRailCard()}
-		</aside>
-	`;
-}
-
 function renderWorkspacePane(): TemplateResult {
 	return html`
 		<section class="workspace-pane">
-			${renderPaneHeader()}
 			<div class="workspace-pane__stage">
 				${renderApprovalBanner()} ${renderTranscriptSurface()}
 			</div>
@@ -1630,6 +1810,7 @@ function renderWorkspaceShell(): TemplateResult {
 				${sidebarOpen ? renderSidebar() : html``}
 				${renderWorkspacePane()}
 			</div>
+			${renderStatusBar()}
 			${renderWorkspaceSwitcherOverlay()} ${renderDetailsOverlay()}
 		</div>
 	`;
@@ -1664,11 +1845,11 @@ async function bootstrap(): Promise<void> {
 	windowState = await window.wepsDesktop.getWindowState();
 	unsubscribeSnapshot = window.wepsDesktop.onSnapshot((nextSnapshot) => {
 		snapshot = nextSnapshot;
-		renderApp();
+		scheduleRender();
 	});
 	unsubscribeWindowState = window.wepsDesktop.onWindowState((nextState) => {
 		windowState = nextState;
-		renderApp();
+		scheduleRender();
 	});
 	renderApp();
 }
@@ -1680,5 +1861,8 @@ window.addEventListener("beforeunload", () => {
 	unsubscribeWindowState?.();
 	if (statusTimer) {
 		window.clearTimeout(statusTimer);
+	}
+	if (renderTimer) {
+		window.clearTimeout(renderTimer);
 	}
 });

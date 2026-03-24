@@ -56,6 +56,8 @@ const bridge: WepsDesktopBridge = {
 		ipcRenderer.invoke(BRIDGE_CHANNELS.setActiveSelection, profileId, modelId) as Promise<DesktopSnapshot>,
 	abortSession: (sessionId: string) =>
 		ipcRenderer.invoke(BRIDGE_CHANNELS.abortSession, sessionId) as Promise<DesktopSnapshot>,
+	getMessageContent: (sessionId: string, messageId: string) =>
+		ipcRenderer.invoke(BRIDGE_CHANNELS.getMessageContent, sessionId, messageId) as Promise<string | null>,
 	minimizeWindow: () => ipcRenderer.invoke(BRIDGE_CHANNELS.windowMinimize) as Promise<DesktopWindowState>,
 	toggleMaximizeWindow: () =>
 		ipcRenderer.invoke(BRIDGE_CHANNELS.windowToggleMaximize) as Promise<DesktopWindowState>,

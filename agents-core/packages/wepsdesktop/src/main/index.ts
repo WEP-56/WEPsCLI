@@ -5,6 +5,7 @@ import {
 	BRIDGE_CHANNELS,
 	type CreateDesktopProviderProfileInput,
 	type DesktopAppContext,
+	type DesktopSnapshot,
 	type DesktopToolApprovalDecision,
 	type DesktopWindowState,
 } from "../shared/bridge.js";
@@ -17,6 +18,7 @@ const devServerUrl = process.env.ELECTRON_RENDERER_URL;
 
 let mainWindow: BrowserWindow | null = null;
 let controller: DesktopController | null = null;
+let pendingSnapshot: DesktopSnapshot | null = null;
 
 function createDesktopContext(): DesktopAppContext {
 	return {
@@ -61,11 +63,32 @@ async function loadWindowContent(window: BrowserWindow): Promise<void> {
 	await window.loadFile(join(rendererDistPath, "index.html"));
 }
 
-function emitSnapshot(): void {
-	if (!controller || !mainWindow || mainWindow.isDestroyed()) {
+function flushPendingSnapshot(): void {
+	if (!pendingSnapshot || !mainWindow || mainWindow.isDestroyed()) {
+		pendingSnapshot = null;
 		return;
 	}
-	mainWindow.webContents.send(BRIDGE_CHANNELS.snapshotUpdated, controller.getSnapshot());
+
+	if (mainWindow.webContents.isLoadingMainFrame()) {
+		return;
+	}
+
+	const snapshot = pendingSnapshot;
+	pendingSnapshot = null;
+	mainWindow.webContents.send(BRIDGE_CHANNELS.snapshotUpdated, snapshot);
+}
+
+function scheduleSnapshotEmit(snapshot: DesktopSnapshot): void {
+	pendingSnapshot = snapshot;
+	if (!mainWindow || mainWindow.isDestroyed()) {
+		return;
+	}
+
+	if (mainWindow.webContents.isLoadingMainFrame()) {
+		return;
+	}
+
+	flushPendingSnapshot();
 }
 
 function getWindowState(window: BrowserWindow): DesktopWindowState {
@@ -203,6 +226,11 @@ function registerIpcHandlers(): void {
 		controller?.abortSession(sessionId),
 	);
 
+	ipcMain.removeHandler(BRIDGE_CHANNELS.getMessageContent);
+	ipcMain.handle(BRIDGE_CHANNELS.getMessageContent, async (_event, sessionId: string, messageId: string) =>
+		controller?.getMessageContent(sessionId, messageId) ?? null,
+	);
+
 	ipcMain.removeHandler(BRIDGE_CHANNELS.windowMinimize);
 	ipcMain.handle(BRIDGE_CHANNELS.windowMinimize, async () => {
 		if (!mainWindow) {
@@ -241,13 +269,14 @@ app.whenReady()
 		controller = new DesktopController(
 			createDesktopContext(),
 			join(app.getPath("userData"), "workspace-state.json"),
-			() => emitSnapshot(),
+			(snapshot) => scheduleSnapshotEmit(snapshot),
 		);
 		registerIpcHandlers();
 		mainWindow = await createMainWindow();
 		await loadWindowContent(mainWindow);
 		mainWindow.webContents.once("did-finish-load", () => {
 			emitWindowState();
+			flushPendingSnapshot();
 		});
 
 		app.on("activate", async () => {
@@ -256,6 +285,7 @@ app.whenReady()
 				await loadWindowContent(mainWindow);
 				mainWindow.webContents.once("did-finish-load", () => {
 					emitWindowState();
+					flushPendingSnapshot();
 				});
 			}
 		});
@@ -268,6 +298,7 @@ app.whenReady()
 app.on("window-all-closed", () => {
 	controller?.dispose();
 	controller = null;
+	pendingSnapshot = null;
 	mainWindow = null;
 	if (process.platform !== "darwin") {
 		app.quit();

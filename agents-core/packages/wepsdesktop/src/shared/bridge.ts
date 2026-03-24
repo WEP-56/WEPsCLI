@@ -15,6 +15,7 @@ export const BRIDGE_CHANNELS = {
 	sendPrompt: "wepsdesktop:send-prompt",
 	setActiveSelection: "wepsdesktop:set-active-selection",
 	abortSession: "wepsdesktop:abort-session",
+	getMessageContent: "wepsdesktop:get-message-content",
 	snapshotUpdated: "wepsdesktop:snapshot-updated",
 	windowMinimize: "wepsdesktop:window-minimize",
 	windowToggleMaximize: "wepsdesktop:window-toggle-maximize",
@@ -131,6 +132,10 @@ export interface DesktopChatMessage {
 	content: string;
 	time: string;
 	kind?: DesktopChatMessageKind;
+	lineCount?: number;
+	contentTruncated?: boolean;
+	fullContentAvailable?: boolean;
+	contentVersion?: number;
 	collapsible?: boolean;
 	expanded?: boolean;
 	tool?: DesktopToolMessageState;
@@ -211,6 +216,7 @@ export interface WepsDesktopBridge {
 	sendPrompt(sessionId: string, text: string): Promise<void>;
 	setActiveSelection(profileId: string, modelId?: string): Promise<DesktopSnapshot>;
 	abortSession(sessionId: string): Promise<DesktopSnapshot>;
+	getMessageContent(sessionId: string, messageId: string): Promise<string | null>;
 	minimizeWindow(): Promise<DesktopWindowState>;
 	toggleMaximizeWindow(): Promise<DesktopWindowState>;
 	closeWindow(): Promise<void>;

@@ -20,7 +20,9 @@
 		"@mariozechner/pi-agent-core": "file:../agent",
 		"@mariozechner/pi-ai": "file:../ai",
 		"@mariozechner/pi-web-ui": "file:../web-ui",
-		"lit": "^3.3.1"
+		"dompurify": "^3.3.3",
+		"lit": "^3.3.1",
+		"marked": "^15.0.12"
 	},
 	"devDependencies": {
 		"electron": "40.4.1",
