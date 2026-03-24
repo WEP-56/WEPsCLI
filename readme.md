@@ -1,7 +1,21 @@
-# WEPsCodingCLI
+<p align="center">
+  <img src="./agents-core/packages/wepsdesktop/icon.png" alt="WEPsCodingCLI logo" width="96" />
+</p>
+
+<h1 align="center">WEPsCodingCLI</h1>
+
+<p align="center">
+  <a href="https://www.npmjs.com/package/wepscli">
+    <img src="https://img.shields.io/npm/v/wepscli?style=flat-square&color=C96C3A&label=npm" alt="npm version" />
+  </a>
+  <img src="https://img.shields.io/badge/Node.js-20%2B-2F6D4E?style=flat-square" alt="Node.js 20+" />
+  <img src="https://img.shields.io/badge/Platform-Windows-1F3B5B?style=flat-square" alt="Windows" />
+  <img src="https://img.shields.io/badge/UI-TUI--first%20%2F%20Desktop--second-6A4B8A?style=flat-square" alt="TUI-first / Desktop-second" />
+  <img src="https://img.shields.io/badge/License-MIT-2A2A2A?style=flat-square" alt="MIT License" />
+</p>
 
 > 这是一个围绕 `wepscli` 与 `wepsdesktop` 持续演进的 coding agent 工作区。  
-> 目标是创造一个属于自己的全生态coding agent，有cli、有app、甚至外接社交工具。
+> 目标是创造一个属于自己的全生态coding agent，有 cli、有 app、甚至外接社交工具。
 
 
 ## 项目概览
